@@ -1,3 +1,4 @@
+/* eslint-disable react/prop-types */
 import React from "react";
 import { Search, Plus, Sparkles } from "lucide-react";
 import ConfettiCard from "./ConfettiCard";

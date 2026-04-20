@@ -20,7 +20,7 @@ const loadConfetti = () => {
 
     const script = document.createElement("script");
     script.src =
-      "https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js";
+      "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js";
     script.onload = resolve;
     script.onerror = reject;
     document.body.appendChild(script);
@@ -57,8 +57,87 @@ export default function ConfettiApp() {
     });
   }
 
+  // const fire = (cfg) => {
+  //   if (!window.confetti) return;
+
+  //   const base = {
+  //     particleCount: cfg.particleCount || 150,
+  //     spread: cfg.spread || 70,
+  //     gravity: cfg.gravity ?? 1,
+  //     origin: cfg.origin || { x: 0.5, y: 0.6 },
+  //     colors: cfg.colors,
+  //     shapes: cfg.shapes,
+  //     startVelocity: cfg.startVelocity || 45,
+  //     decay: cfg.decay || 0.9,
+  //     drift: cfg.drift || 0,
+  //   };
+
+  //   switch (cfg.burstType) {
+  //     case "fireworks": {
+  //       for (let i = 0; i < 3; i++) {
+  //         window.confetti({
+  //           ...base,
+  //           particleCount: Math.round(base.particleCount / 3),
+  //           startVelocity: 50,
+  //           ticks: 250,
+  //           origin: {
+  //             x: 0.2 + 0.3 * i,
+  //             y: Math.random() * 0.4 + 0.1,
+  //           },
+  //         });
+  //       }
+  //       break;
+  //     }
+
+  //     case "snow":
+  //       window.confetti({
+  //         ...base,
+  //         particleCount: base.particleCount ?? 250,
+  //         spread: 160,
+  //         gravity: 0.3,
+  //         startVelocity: 10,
+  //         ticks: 400,
+  //       });
+  //       break;
+
+  //     case "pride":
+  //       window.confetti({
+  //         ...base,
+  //         spread: 120,
+  //         startVelocity: 35,
+  //         ticks: 300,
+  //         gravity: 0.7,
+  //       });
+  //       break;
+
+  //     default:
+  //       window.confetti({
+  //         ...base,
+  //         startVelocity: 45,
+  //       });
+  //   }
+  // };
+
   const fire = (cfg) => {
     if (!window.confetti) return;
+
+    // 🌟 Convert custom shape strings to SVG paths for canvas-confetti
+    const resolvedShapes = cfg.shapes
+      ? cfg.shapes.map((shape) => {
+          if (shape === "heart") {
+            return window.confetti.shapeFromPath({
+              path: "M12,21.35L10.55,20.03C5.4,15.36,2,12.28,2,8.5C2,5.42,4.42,3,7.5,3C9.24,3,10.91,3.81,12,5.09C13.09,3.81,14.76,3,16.5,3C19.58,3,22,5.42,22,8.5C22,12.28,18.6,15.36,13.45,20.03L12,21.35Z",
+            });
+          }
+          if (shape === "star") {
+            return window.confetti.shapeFromPath({
+              path: "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z",
+            });
+          }
+
+          return shape; // Returns 'circle' or 'square' natively
+        })
+      : ["circle"];
 
     const base = {
       particleCount: cfg.particleCount || 150,
@@ -66,7 +145,8 @@ export default function ConfettiApp() {
       gravity: cfg.gravity ?? 1,
       origin: cfg.origin || { x: 0.5, y: 0.6 },
       colors: cfg.colors,
-      shapes: cfg.shapes,
+      shapes: resolvedShapes, // 👈 Passing the resolved shapes array here
+      scalar: 1.2,
       startVelocity: cfg.startVelocity || 45,
       decay: cfg.decay || 0.9,
       drift: cfg.drift || 0,
@@ -117,7 +197,6 @@ export default function ConfettiApp() {
         });
     }
   };
-
   useEffect(() => {
     if (typeof window === "undefined") return;
 

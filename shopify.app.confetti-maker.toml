@@ -5,16 +5,19 @@ name = "ConfettiFlow - Explified"
 application_url = "https://confetti-maker.vercel.app"
 embedded = true
 
+[build]
+automatically_update_urls_on_dev = true
+
 [webhooks]
 api_version = "2026-01"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/compliance"
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-
-  [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
   [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
@@ -28,6 +31,3 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [ "https://confetti-maker.vercel.app/auth/callback" ]
-
-[build]
-automatically_update_urls_on_dev = true

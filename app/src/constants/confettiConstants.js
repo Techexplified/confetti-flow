@@ -1,4 +1,4 @@
-import { Circle, Square, Heart, Star } from "lucide-react";
+import { Circle, Square, Heart, Star, Music } from "lucide-react";
 
 export const SHAPE_OPTIONS = [
   { id: "circle", label: "Circle", icon: Circle },
@@ -25,7 +25,7 @@ export const PREDEFINED_CONFETTI = [
     burstType: "fireworks",
     gravity: 1.0,
     spread: 90,
-    isPredefined: true
+    isPredefined: true,
   },
   {
     id: "p2",
@@ -33,17 +33,11 @@ export const PREDEFINED_CONFETTI = [
     title: "Rainbow Splash",
     particleCount: 300,
     shapes: ["circle", "square"],
-    colors: [
-      "#FF0000",
-      "#00FF00",
-      "#0000FF",
-      "#FFD700",
-      "#FF69B4"
-    ],
+    colors: ["#FF0000", "#00FF00", "#0000FF", "#FFD700", "#FF69B4"],
     burstType: "pride",
     gravity: 0.8,
     spread: 120,
-    isPredefined: true
+    isPredefined: true,
   },
   {
     id: "p3",
@@ -55,8 +49,8 @@ export const PREDEFINED_CONFETTI = [
     burstType: "cannon",
     gravity: 1.2,
     spread: 80,
-    isPredefined: true
-  }
+    isPredefined: true,
+  },
 ];
 
 // 🎫 UPDATED — Both vouchers same UI but different physics/colors
@@ -71,7 +65,7 @@ export const PREDEFINED_VOUCHERS = [
     burstType: "fireworks",
     gravity: 1.0,
     spread: 70,
-    isPredefined: true
+    isPredefined: true,
   },
   {
     id: "v2",
@@ -83,6 +77,6 @@ export const PREDEFINED_VOUCHERS = [
     burstType: "cannon",
     gravity: 1.1,
     spread: 75,
-    isPredefined: true
-  }
+    isPredefined: true,
+  },
 ];

@@ -1,16 +1,11 @@
+/* eslint-disable react/prop-types */
 import React from "react";
-import {
-  ArrowLeft,
-  Globe,
-  Ticket,
-  Sparkles,
-  XCircle,
-  Plus,
-} from "lucide-react";
+import { ArrowLeft, Globe, Ticket, XCircle, Plus } from "lucide-react";
 import { SHAPE_OPTIONS, BURST_TYPES } from "../constants/confettiConstants";
 
 export default function EditorView({
   activeConfig,
+  // eslint-disable-next-line react/prop-types
   setActiveConfig,
   fire,
   saveDraft,
@@ -49,7 +44,7 @@ export default function EditorView({
 
       const script = document.createElement("script");
       script.src =
-        "https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js";
+        "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js";
       script.onload = resolve;
       document.body.appendChild(script);
     });
@@ -343,7 +338,6 @@ export default function EditorView({
             onClick={handleTest}
             className="w-full py-2.5 rounded-lg font-bold text-sm bg-gradient-to-r from-[#155E63] to-[#1F9D8B] text-white shadow-sm hover:shadow-md transition-shadow flex items-center justify-center gap-2"
           >
-            <Sparkles className="w-4 h-4" />
             Test Confetti
           </button>
         </div>
@@ -440,7 +434,6 @@ export default function EditorView({
                 </div>
 
                 <p className="text-slate-400 font-medium text-sm relative z-10 flex flex-col items-center gap-2">
-                  <Sparkles className="w-8 h-8 opacity-50" />
                   Preview Area
                 </p>
               </div>
@@ -452,7 +445,6 @@ export default function EditorView({
                 onClick={handleTest}
                 className="px-8 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-[#155E63] to-[#1F9D8B] hover:bg-slate-800 transition-all shadow-lg active:scale-95 flex items-center gap-2"
               >
-                <Sparkles className="w-4 h-4" />
                 {isVoucher ? "Reveal Voucher" : "Launch Confetti"}
               </button>
               <div className="mt-3 text-xs font-bold text-slate-400 uppercase tracking-wider">
