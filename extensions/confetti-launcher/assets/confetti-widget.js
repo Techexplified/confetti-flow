@@ -232,8 +232,12 @@
       }
 
       // PURCHASE COMPLETE
-      if (trigger === "purchase_complete") {
-        if (window.Shopify?.checkout) {
+      if (trigger === "purchase" || trigger === "purchase_complete") {
+        const isThankYouPage =
+          window.location.pathname.includes("/thank_you") ||
+          window.location.pathname.includes("/orders/");
+
+        if (isThankYouPage) {
           fire();
         }
       }

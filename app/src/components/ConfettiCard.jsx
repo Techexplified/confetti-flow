@@ -1,3 +1,4 @@
+/* eslint-disable react/prop-types */
 import React from "react";
 import { Edit2, Trash2 } from "lucide-react";
 import { ToggleSwitch } from "./ToggleSwitch";
@@ -16,7 +17,6 @@ function formatTrigger(trigger) {
 
   return map[trigger] || trigger;
 }
-
 
 export default function ConfettiCard({
   item,
@@ -43,7 +43,8 @@ export default function ConfettiCard({
               : "bg-pink-50 text-pink-600"
           }`}
         >
-          {item.type === "confetti" ? "⚡" : "🎫"}
+          {/* {item.type === "confetti" ? "⚡" : "🎫"} */}
+          {item?.title?.charAt(0)?.toUpperCase() || "?"}
         </div>
 
         {/* TEXT */}
@@ -61,17 +62,16 @@ export default function ConfettiCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 mt-1">
-  <p className="text-xs text-slate-500 font-medium uppercase tracking-tight">
-    {item.isPredefined ? "Template" : item.createdAt || "Just now"}
-  </p>
+            <p className="text-xs text-slate-500 font-medium uppercase tracking-tight">
+              {item.isPredefined ? "Template" : item.createdAt || "Just now"}
+            </p>
 
-  {item.isActive && item.trigger && (
-    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
-      {formatTrigger(item.trigger)}
-    </span>
-  )}
-</div>
-
+            {item.isActive && item.trigger && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                {formatTrigger(item.trigger)}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

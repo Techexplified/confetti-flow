@@ -197,6 +197,7 @@ export default function ConfettiApp() {
         });
     }
   };
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
