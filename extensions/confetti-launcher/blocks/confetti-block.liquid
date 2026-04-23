@@ -5,18 +5,14 @@
 {% assign activeConfigsRaw = shop.metafields.confetti_maker.active_configs.value %}
 
 <script>
-  window.__CONFETTI_SETTINGS__ = {};
-
-  try {
-    const raw = {{ activeConfigsRaw | json }};
-    window.__CONFETTI_SETTINGS__.configs =
-      typeof raw === "string" ? JSON.parse(raw) : raw || [];
-  } catch(e) {
-    console.error("Confetti parse error:", e);
-    window.__CONFETTI_SETTINGS__.configs = [];
-  }
-
-  console.log("CONFETTI SETTINGS:", window.__CONFETTI_SETTINGS__);
+  window.__CONFETTI_SETTINGS__ = {
+    configs: [
+      {
+        trigger: "purchase",
+        config: {{ shop.metafields.confetti_maker.active_configs.value | json }}
+      }
+    ]
+  };
 </script>
 
 <script src="{{ 'confetti-widget.js' | asset_url }}" defer></script>
