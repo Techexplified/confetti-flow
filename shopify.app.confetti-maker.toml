@@ -2,7 +2,7 @@
 
 client_id = "52c90499b09f59145f055fcaea861ab0"
 name = "ConfettiFlow - Explified"
-application_url = "https://confetti-maker.vercel.app"
+application_url = "https://confetti-flow.vercel.app"
 embedded = true
 
 [build]
