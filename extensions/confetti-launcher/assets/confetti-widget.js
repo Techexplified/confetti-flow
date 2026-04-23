@@ -250,6 +250,8 @@
     });
   }
 
+  window.addEventListener("popstate", init);
+
   if (document.readyState === "loading")
     document.addEventListener("DOMContentLoaded", () => waitForConfetti(init));
   else waitForConfetti(init);
