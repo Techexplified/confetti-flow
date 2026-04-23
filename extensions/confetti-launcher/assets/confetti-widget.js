@@ -241,7 +241,7 @@
           path.includes("/thank-you") ||
           path.includes("/thank_you") ||
           path.includes("/orders/") ||
-          path.includes("checkouts"); // Extra safety for some Shopify setups
+          path.includes("checkouts");
 
         if (isThankYouPage) {
           fire();
