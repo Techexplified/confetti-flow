@@ -232,10 +232,16 @@
       }
 
       // PURCHASE COMPLETE
+      // PURCHASE COMPLETE
       if (trigger === "purchase" || trigger === "purchase_complete") {
+        const path = window.location.pathname;
+
+        // Shopify uses hyphens in /thank-you, and /orders/ for status pages
         const isThankYouPage =
-          window.location.pathname.includes("/thank_you") ||
-          window.location.pathname.includes("/orders/");
+          path.includes("/thank-you") ||
+          path.includes("/thank_you") ||
+          path.includes("/orders/") ||
+          path.includes("checkouts"); // Extra safety for some Shopify setups
 
         if (isThankYouPage) {
           fire();
