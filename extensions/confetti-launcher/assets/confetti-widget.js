@@ -232,7 +232,8 @@
       }
 
       // PURCHASE COMPLETE
-      // PURCHASE COMPLETE
+      console.log({ trigger });
+
       if (trigger === "purchase" || trigger === "purchase_complete") {
         const path = window.location.pathname;
 
