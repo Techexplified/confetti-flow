@@ -250,37 +250,18 @@
       }
 
       // PURCHASE COMPLETE
-      console.log({ trigger });
 
       if (trigger === "purchase" || trigger === "purchase_complete") {
-        setTimeout(() => {
-          const text = document.body.innerText.toLowerCase();
+        const path = window.location.pathname;
 
-          if (
-            text.includes("thank you") ||
-            text.includes("order confirmed") ||
-            window.location.pathname.includes("thank-you") ||
-            window.location.pathname.includes("/orders/") ||
-            window.location.pathname.includes("/checkouts")
-          ) {
-            fire();
-          }
-        }, 1000);
+        // Shopify uses hyphens in /thank-you, and /orders/ for status pages
+        const isThankYouPage =
+          path.includes("/thank-you") || path.includes("checkouts");
+
+        if (isThankYouPage) {
+          fire();
+        }
       }
-
-      // if (trigger === "purchase" || trigger === "purchase_complete") {
-      //   const path = window.location.pathname;
-
-      //   // Shopify uses hyphens in /thank-you, and /orders/ for status pages
-      //   const isThankYouPage =
-      //     path.includes("/thank-you") ||
-      //     path.includes("/orders/") ||
-      //     path.includes("checkouts");
-
-      //   if (isThankYouPage) {
-      //     fire();
-      //   }
-      // }
     });
   }
 
