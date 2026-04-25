@@ -7,13 +7,31 @@
   function fireConfetti(cfg) {
     if (!cfg || !window.confetti) return;
 
+    const resolvedShapes = cfg.shapes
+      ? cfg.shapes.map((shape) => {
+          if (shape === "heart") {
+            return window.confetti.shapeFromPath({
+              path: "M12,21.35L10.55,20.03C5.4,15.36,2,12.28,2,8.5C2,5.42,4.42,3,7.5,3C9.24,3,10.91,3.81,12,5.09C13.09,3.81,14.76,3,16.5,3C19.58,3,22,5.42,22,8.5C22,12.28,18.6,15.36,13.45,20.03L12,21.35Z",
+            });
+          }
+
+          if (shape === "star") {
+            return window.confetti.shapeFromPath({
+              path: "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z",
+            });
+          }
+
+          return shape; // circle, square
+        })
+      : ["circle"];
+
     const base = {
       particleCount: cfg.particleCount || 150,
       spread: cfg.spread || 70,
       gravity: cfg.gravity ?? 1,
       origin: cfg.origin || { x: 0.5, y: 0.6 },
       colors: cfg.colors,
-      shapes: cfg.shapes,
+      shapes: resolvedShapes,
     };
 
     switch (cfg.burstType) {

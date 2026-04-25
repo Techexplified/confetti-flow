@@ -1,4 +1,4 @@
-import { Circle, Square, Heart, Star, Music } from "lucide-react";
+import { Circle, Square, Heart, Star } from "lucide-react";
 
 export const SHAPE_OPTIONS = [
   { id: "circle", label: "Circle", icon: Circle },
