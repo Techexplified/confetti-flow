@@ -1,11 +1,238 @@
 /* eslint-disable react/prop-types */
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { ArrowLeft, Globe, Ticket, XCircle, Plus } from "lucide-react";
-import { SHAPE_OPTIONS, BURST_TYPES } from "../constants/confettiConstants";
+import {
+  SHAPE_OPTIONS,
+  BURST_TYPES,
+  BACKGROUND_EFFECTS,
+} from "../constants/confettiConstants";
 
+// ─── Canvas background-effect renderer ───────────────────────────────────────
+// Returns a stop() function. Call it to cancel the animation.
+function runBackgroundEffect(canvas, effectId, colors = []) {
+  const ctx = canvas.getContext("2d");
+  let raf;
+  let particles = [];
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const rand = (a, b) => Math.random() * (b - a) + a;
+  const pickColor = () =>
+    colors.length
+      ? colors[Math.floor(Math.random() * colors.length)]
+      : "#FFD700";
+
+  // ── Build initial particle set ──
+  if (effectId === "balloons") {
+    for (let i = 0; i < 18; i++) {
+      particles.push({
+        x: rand(0, W),
+        y: rand(H * 0.3, H + 100),
+        r: rand(18, 36),
+        color: pickColor(),
+        vx: rand(-0.4, 0.4),
+        vy: rand(-0.6, -1.2),
+        sway: rand(0, Math.PI * 2),
+        swaySpeed: rand(0.01, 0.03),
+      });
+    }
+  } else if (effectId === "petals") {
+    for (let i = 0; i < 40; i++) {
+      particles.push({
+        x: rand(0, W),
+        y: rand(-H, 0),
+        r: rand(6, 14),
+        color: pickColor(),
+        vx: rand(-0.5, 0.5),
+        vy: rand(0.6, 1.6),
+        rot: rand(0, Math.PI * 2),
+        rotSpeed: rand(-0.04, 0.04),
+        sway: rand(0, Math.PI * 2),
+        swaySpeed: rand(0.01, 0.025),
+      });
+    }
+  } else if (effectId === "sparks") {
+    // continuously emit from bottom center
+  } else if (effectId === "money") {
+    for (let i = 0; i < 30; i++) {
+      particles.push({
+        x: rand(0, W),
+        y: rand(-H, 0),
+        w: rand(16, 28),
+        h: rand(9, 14),
+        color: pickColor(),
+        vy: rand(1, 2.5),
+        vx: rand(-0.4, 0.4),
+        rot: rand(0, Math.PI * 2),
+        rotSpeed: rand(-0.03, 0.03),
+      });
+    }
+  }
+
+  // ── Draw helpers ──
+  const drawBalloon = (p) => {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    // body
+    ctx.beginPath();
+    ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = 0.85;
+    ctx.fill();
+    // shine
+    ctx.beginPath();
+    ctx.arc(-p.r * 0.3, -p.r * 0.3, p.r * 0.25, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.fill();
+    // string
+    ctx.beginPath();
+    ctx.moveTo(0, p.r);
+    ctx.quadraticCurveTo(p.r * 0.5, p.r * 2, 0, p.r * 3.5);
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.6;
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const drawPetal = (p) => {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, p.r * 0.5, p.r, 0, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = 0.75;
+    ctx.fill();
+    ctx.restore();
+  };
+
+  const drawMoney = (p) => {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = `bold ${p.h * 0.7}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("$", 0, 0);
+    ctx.restore();
+  };
+
+  // ── Spark emitter state ──
+  let sparks = [];
+  const emitSparks = () => {
+    for (let i = 0; i < 3; i++) {
+      const angle = rand(-Math.PI * 0.9, -Math.PI * 0.1); // upward arc
+      const speed = rand(2, 6);
+      sparks.push({
+        x: W / 2 + rand(-20, 20),
+        y: H,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        decay: rand(0.012, 0.025),
+        r: rand(2, 4),
+        color: ["#FF4500", "#FF8C00", "#FFD700", "#FFF"][
+          Math.floor(rand(0, 4))
+        ],
+      });
+    }
+  };
+
+  // ── Animation loop ──
+  const tick = () => {
+    ctx.clearRect(0, 0, W, H);
+
+    if (effectId === "balloons") {
+      particles.forEach((p) => {
+        p.sway += p.swaySpeed;
+        p.x += p.vx + Math.sin(p.sway) * 0.4;
+        p.y += p.vy;
+        if (p.y + p.r * 4 < 0) {
+          p.y = H + p.r * 4;
+          p.x = rand(0, W);
+        }
+        drawBalloon(p);
+      });
+    } else if (effectId === "petals") {
+      particles.forEach((p) => {
+        p.sway += p.swaySpeed;
+        p.x += p.vx + Math.sin(p.sway) * 0.6;
+        p.y += p.vy;
+        p.rot += p.rotSpeed;
+        if (p.y - p.r > H) {
+          p.y = -p.r;
+          p.x = rand(0, W);
+        }
+        drawPetal(p);
+      });
+    } else if (effectId === "sparks") {
+      emitSparks();
+      sparks.forEach((s) => {
+        s.x += s.vx;
+        s.y += s.vy;
+        s.vy += 0.12; // gravity
+        s.life -= s.decay;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, s.life);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r * s.life, 0, Math.PI * 2);
+        ctx.fillStyle = s.color;
+        ctx.fill();
+        ctx.restore();
+      });
+      sparks = sparks.filter((s) => s.life > 0);
+    } else if (effectId === "money") {
+      particles.forEach((p) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.rotSpeed;
+        if (p.y - p.h > H) {
+          p.y = -p.h;
+          p.x = rand(0, W);
+        }
+        drawMoney(p);
+      });
+    }
+
+    raf = requestAnimationFrame(tick);
+  };
+
+  raf = requestAnimationFrame(tick);
+  return () => cancelAnimationFrame(raf);
+}
+
+// ─── BackgroundEffectCanvas component ────────────────────────────────────────
+function BackgroundEffectCanvas({ effectId, colors }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !effectId || effectId === "none") return;
+    const stop = runBackgroundEffect(canvas, effectId, colors);
+    return stop;
+  }, [effectId, colors?.join(",")]);
+
+  if (!effectId || effectId === "none") return null;
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={520}
+      height={256}
+      className="absolute inset-0 w-full h-full pointer-events-none rounded-2xl"
+    />
+  );
+}
+
+// ─── Main EditorView ──────────────────────────────────────────────────────────
 export default function EditorView({
   activeConfig,
-  // eslint-disable-next-line react/prop-types
   setActiveConfig,
   fire,
   saveDraft,
@@ -18,39 +245,18 @@ export default function EditorView({
   if (!activeConfig) return null;
 
   const isVoucher = activeConfig.type === "voucher";
+  const currentEffect = activeConfig.backgroundEffect || "none";
 
-  const buildFirePayload = (config) => ({
-    particleCount: config.particleCount ?? 200,
-    spread: config.spread ?? 90,
-    gravity: config.gravity ?? 1.0,
-    colors: config.colors ?? ["#FFB396"],
-    shapes: config.shapes?.length ? config.shapes : ["circle"],
-
-    // REQUIRED defaults (your old version always included these)
-    origin: { x: 0.5, y: 0.6 },
-    startVelocity: 45,
-    decay: 0.9,
-    drift: 0,
-
-    burstType: config.burstType ?? "cannon",
-  });
-
-  const ensureConfettiLoaded = () => {
-    return new Promise((resolve) => {
-      if (window.confetti) {
-        resolve();
-        return;
-      }
-
+  const ensureConfettiLoaded = () =>
+    new Promise((resolve) => {
+      if (window.confetti) return resolve();
       const script = document.createElement("script");
       script.src =
         "https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js";
       script.onload = resolve;
       document.body.appendChild(script);
     });
-  };
 
-  // Determine active state based on correct type
   const isActive =
     activeConfig.type === "confetti"
       ? savedConfetti.some((i) => i.id === activeConfig.id && i.isActive)
@@ -58,8 +264,6 @@ export default function EditorView({
 
   const handleTest = async () => {
     await ensureConfettiLoaded();
-
-    // Extract values with safe fallbacks
     const {
       particleCount = 200,
       spread = 90,
@@ -69,28 +273,23 @@ export default function EditorView({
       burstType = "cannon",
     } = activeConfig;
 
-    // OLD working payload
-    const payload = {
+    fire({
       particleCount,
       spread,
       gravity,
       burstType,
       colors,
       shapes: shapes.length ? shapes : ["circle"],
-
-      // REQUIRED defaults (old code used these always)
       origin: { x: 0.5, y: 0.6 },
       startVelocity: 45,
       decay: 0.9,
       drift: 0,
-    };
-
-    fire(payload);
+    });
   };
 
   return (
     <div className="flex h-screen w-full bg-[#F8FAFC] text-slate-900 overflow-hidden font-sans">
-      {/* SETTINGS SIDEBAR */}
+      {/* ── SETTINGS SIDEBAR ── */}
       <aside className="w-96 bg-white border-r border-slate-200 flex flex-col overflow-hidden z-10 shadow-sm">
         <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-100">
           <button
@@ -102,7 +301,6 @@ export default function EditorView({
           <h2 className="font-bold text-sm text-slate-900">Configuration</h2>
         </div>
 
-        {/* MAIN SETTINGS */}
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-8">
           {/* General */}
           <section className="space-y-4">
@@ -110,7 +308,6 @@ export default function EditorView({
               General
             </h3>
 
-            {/* Title */}
             <div className="space-y-2">
               <label className="text-xs font-bold text-slate-600">Name</label>
               <input
@@ -123,7 +320,6 @@ export default function EditorView({
               />
             </div>
 
-            {/* Voucher Code */}
             {isVoucher && (
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-600">
@@ -165,7 +361,35 @@ export default function EditorView({
             </div>
           </section>
 
-          {/* Shapes (ONLY Confetti) */}
+          {/* 🆕 Background Effects */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+              Background Effect
+            </h3>
+            <div className="grid grid-cols-2 gap-2">
+              {BACKGROUND_EFFECTS.map((effect) => (
+                <button
+                  key={effect.id}
+                  onClick={() =>
+                    setActiveConfig({
+                      ...activeConfig,
+                      backgroundEffect: effect.id,
+                    })
+                  }
+                  className={`p-2.5 rounded-lg text-xs font-bold transition-all border flex items-center gap-1.5 ${
+                    currentEffect === effect.id
+                      ? "bg-purple-50 border-purple-500 text-purple-700"
+                      : "bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50"
+                  }`}
+                >
+                  <span>{effect.emoji}</span>
+                  <span>{effect.label}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Shapes (confetti only) */}
           {!isVoucher && (
             <section className="space-y-3">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
@@ -199,13 +423,12 @@ export default function EditorView({
             </section>
           )}
 
-          {/* PHYSICS */}
+          {/* Physics */}
           <section className="space-y-4">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
               Physics
             </h3>
 
-            {/* Gravity */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-bold text-slate-600">
@@ -231,7 +454,6 @@ export default function EditorView({
               />
             </div>
 
-            {/* Spread */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-bold text-slate-600">
@@ -256,7 +478,6 @@ export default function EditorView({
               />
             </div>
 
-            {/* Particle Count */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-bold text-slate-600">
@@ -317,8 +538,6 @@ export default function EditorView({
                   </button>
                 </div>
               ))}
-
-              {/* Add Color */}
               <button
                 onClick={() =>
                   setActiveConfig({
@@ -333,7 +552,6 @@ export default function EditorView({
             </div>
           </section>
 
-          {/* Test */}
           <button
             onClick={handleTest}
             className="w-full py-2.5 rounded-lg font-bold text-sm bg-gradient-to-r from-[#155E63] to-[#1F9D8B] text-white shadow-sm hover:shadow-md transition-shadow flex items-center justify-center gap-2"
@@ -342,7 +560,7 @@ export default function EditorView({
           </button>
         </div>
 
-        {/* Save/Cancel */}
+        {/* Save / Cancel */}
         <div className="px-6 py-4 border-t border-slate-100 space-y-3 bg-white">
           <button
             onClick={saveDraft}
@@ -350,7 +568,6 @@ export default function EditorView({
           >
             Save Draft
           </button>
-
           <button
             onClick={() => setView("dashboard")}
             className="w-full py-2.5 rounded-lg font-bold text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
@@ -360,12 +577,10 @@ export default function EditorView({
         </div>
       </aside>
 
-      {/* LIVE PREVIEW */}
+      {/* ── LIVE PREVIEW ── */}
       <main className="flex-1 flex flex-col overflow-hidden bg-[#F1F5F9]">
         <header className="flex items-center justify-between px-8 py-4 border-b border-slate-200 bg-white">
           <h3 className="font-bold text-sm text-slate-900">Live Preview</h3>
-
-          {/* ACTIVATE / DEACTIVATE BUTTON */}
           <button
             onClick={async () => {
               if (isActive) {
@@ -393,22 +608,27 @@ export default function EditorView({
           </button>
         </header>
 
-        {/* PREVIEW CONTENT */}
         <div className="flex-1 flex items-center justify-center p-12 relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:24px_24px] opacity-40"></div>
+          <div className="absolute inset-0 bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:24px_24px] opacity-40" />
 
           <div className="relative z-10 flex flex-col items-center gap-8 text-center max-w-md w-full">
             {/* Voucher UI */}
             {isVoucher && (
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-xl px-10 py-12 w-full">
-                <div className="w-16 h-16 rounded-2xl bg-green-100 flex items-center justify-center text-green-500 mx-auto mb-4">
-                  <Ticket className="w-8 h-8" />
-                </div>
-                <h4 className="text-xl font-bold text-slate-900 mb-4">
-                  {activeConfig.title}
-                </h4>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl py-3 px-6 font-mono text-2xl font-bold tracking-[0.1em] text-slate-800">
-                  {activeConfig.code}
+              <div className="relative bg-white rounded-2xl border border-slate-200 shadow-xl px-10 py-12 w-full overflow-hidden">
+                <BackgroundEffectCanvas
+                  effectId={currentEffect}
+                  colors={activeConfig.colors}
+                />
+                <div className="relative z-10">
+                  <div className="w-16 h-16 rounded-2xl bg-green-100 flex items-center justify-center text-green-500 mx-auto mb-4">
+                    <Ticket className="w-8 h-8" />
+                  </div>
+                  <h4 className="text-xl font-bold text-slate-900 mb-4">
+                    {activeConfig.title}
+                  </h4>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl py-3 px-6 font-mono text-2xl font-bold tracking-[0.1em] text-slate-800">
+                    {activeConfig.code}
+                  </div>
                 </div>
               </div>
             )}
@@ -416,25 +636,43 @@ export default function EditorView({
             {/* Confetti UI */}
             {!isVoucher && (
               <div className="relative bg-white rounded-2xl border border-slate-200 h-64 w-full flex items-center justify-center overflow-hidden shadow-lg">
-                <div className="absolute inset-0 opacity-40">
-                  {activeConfig.colors?.map((color, i) => (
-                    <div
-                      key={i}
-                      className="absolute rounded-full"
-                      style={{
-                        width: Math.random() * 80 + 30 + "px",
-                        height: Math.random() * 80 + 30 + "px",
-                        left: Math.random() * 100 + "%",
-                        top: Math.random() * 100 + "%",
-                        backgroundColor: color,
-                        filter: "blur(20px)",
-                      }}
-                    />
-                  ))}
-                </div>
+                {/* Background effect canvas */}
+                <BackgroundEffectCanvas
+                  effectId={currentEffect}
+                  colors={activeConfig.colors}
+                />
+
+                {/* Colour blobs (only when no effect active) */}
+                {currentEffect === "none" && (
+                  <div className="absolute inset-0 opacity-40">
+                    {activeConfig.colors?.map((color, i) => (
+                      <div
+                        key={i}
+                        className="absolute rounded-full"
+                        style={{
+                          width: Math.random() * 80 + 30 + "px",
+                          height: Math.random() * 80 + 30 + "px",
+                          left: Math.random() * 100 + "%",
+                          top: Math.random() * 100 + "%",
+                          backgroundColor: color,
+                          filter: "blur(20px)",
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
 
                 <p className="text-slate-400 font-medium text-sm relative z-10 flex flex-col items-center gap-2">
-                  Preview Area
+                  {currentEffect !== "none" ? (
+                    <span className="text-2xl">
+                      {
+                        BACKGROUND_EFFECTS.find((e) => e.id === currentEffect)
+                          ?.emoji
+                      }
+                    </span>
+                  ) : (
+                    "Preview Area"
+                  )}
                 </p>
               </div>
             )}

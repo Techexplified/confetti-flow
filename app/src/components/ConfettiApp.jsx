@@ -286,6 +286,9 @@ export default function ConfettiApp() {
   // -------------------------------------------------------------
   // 🟧 5) CREATE NEW DRAFT
   // -------------------------------------------------------------
+  // CHANGE ONLY: handleCreateNew — add backgroundEffect: "none" to the default config
+  // Find this block in your ConfettiApp.jsx and replace it:
+
   const handleCreateNew = (typeOverride) => {
     const type =
       typeof typeOverride === "string" ? typeOverride : activeDraftTab;
@@ -301,6 +304,7 @@ export default function ConfettiApp() {
       colors: ["#FFB396"],
       code: type === "voucher" ? "SAVE20" : "",
       burstType: "cannon",
+      backgroundEffect: "none", // 🆕
       isPredefined: false,
       isActive: false,
     });

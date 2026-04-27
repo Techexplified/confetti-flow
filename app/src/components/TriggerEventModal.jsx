@@ -7,11 +7,11 @@ const TRIGGER_EVENTS = [
     label: "On page load",
     description: "Fire confetti when page loads.",
   },
-  {
-    id: "purchase",
-    label: "On purchase",
-    description: "Fire confetti on the 'Thank You' page after a checkout.",
-  },
+  // {
+  //   id: "purchase",
+  //   label: "On purchase",
+  //   description: "Fire confetti on the 'Thank You' page after a checkout.",
+  // },
   {
     id: "custom_date",
     label: "On custom date",

@@ -14,6 +14,15 @@ export const BURST_TYPES = [
   { id: "snow", label: "❄️ Snow", value: "snow" },
 ];
 
+// 🆕 Background effects — rendered via canvas animation (not confetti library)
+export const BACKGROUND_EFFECTS = [
+  { id: "none", label: "None", emoji: "🚫" },
+  { id: "balloons", label: "Balloons", emoji: "🎈" },
+  { id: "petals", label: "Petals", emoji: "🌸" },
+  { id: "sparks", label: "Fire Sparks", emoji: "🔥" },
+  { id: "money", label: "Money Rain", emoji: "💸" },
+];
+
 export const PREDEFINED_CONFETTI = [
   {
     id: "p1",
@@ -49,6 +58,42 @@ export const PREDEFINED_CONFETTI = [
     burstType: "cannon",
     gravity: 1.2,
     spread: 80,
+    isPredefined: true,
+  },
+  {
+    id: "p4",
+    type: "confetti",
+    title: "Sale Celebration",
+    particleCount: 250,
+    shapes: ["square", "circle"],
+    colors: ["#FF5733", "#FFC300", "#C70039", "#900C3F"], // High-energy reds and yellows
+    burstType: "cannon",
+    gravity: 1.1,
+    spread: 100,
+    isPredefined: true,
+  },
+  {
+    id: "p5",
+    type: "confetti",
+    title: "Birthday Offer",
+    particleCount: 180,
+    shapes: ["circle", "star"],
+    colors: ["#FF69B4", "#87CEEB", "#FFD700", "#DA70D6", "#00FA9A"], // Fun, bright pastels
+    burstType: "default",
+    gravity: 0.7, // Slightly lighter gravity for a "floaty" feel
+    spread: 80,
+    isPredefined: true,
+  },
+  {
+    id: "p6",
+    type: "confetti",
+    title: "Festival Blast",
+    particleCount: 350, // Extra dense for that big "festival" look
+    shapes: ["star"],
+    colors: ["#FF4500", "#FFD700", "#FFFFFF", "#7B68EE", "#FF1493"], // Vibrant sparks
+    burstType: "fireworks", // This matches your switch case logic!
+    gravity: 1.0,
+    spread: 120,
     isPredefined: true,
   },
 ];
