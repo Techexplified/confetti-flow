@@ -111,7 +111,7 @@
           r: rand(20, 40),
           color: pickColor(),
           vx: rand(-0.4, 0.4),
-          vy: rand(-0.7, -1.4),
+          vy: rand(-0.7, -3),
           sway: rand(0, Math.PI * 2),
           swaySpeed: rand(0.01, 0.03),
         });
@@ -124,7 +124,7 @@
           r: rand(7, 16),
           color: pickColor(),
           vx: rand(-0.5, 0.5),
-          vy: rand(0.7, 1.8),
+          vy: rand(0.7, 3),
           rot: rand(0, Math.PI * 2),
           rotSpeed: rand(-0.04, 0.04),
           sway: rand(0, Math.PI * 2),
