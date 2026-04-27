@@ -280,7 +280,7 @@
     setTimeout(() => {
       cancelAnimationFrame(raf);
       canvas.remove();
-    }, 12000);
+    }, 5000);
   }
 
   // ─── Voucher card ─────────────────────────────────────────────────────────
