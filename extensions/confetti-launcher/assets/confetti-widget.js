@@ -108,7 +108,7 @@
         particles.push({
           x: rand(0, W),
           y: rand(H * 0.3, H + 100),
-          r: rand(20, 40),
+          r: rand(18, 36),
           color: pickColor(),
           vx: rand(-0.4, 0.4),
           vy: rand(-0.7, -3),
