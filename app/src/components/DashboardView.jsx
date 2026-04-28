@@ -55,7 +55,7 @@ export default function DashboardView({
             </div>
             <div>
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">
-                ConfettiFlow - Explified
+                ConfettiFlow
               </h1>
               <p className="text-sm text-slate-500 mt-1">
                 Create magical moment triggers
