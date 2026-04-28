@@ -1,8 +1,8 @@
 # Learn more about configuring your app at [https://shopify.dev/docs/apps/tools/cli/configuration](https://shopify.dev/docs/apps/tools/cli/configuration)
 
 client_id = "72c63ce02e7da1645b5de98cbc6f2b44"
-name = "Confetti Maker"
-application_url = "https://confetti-maker.vercel.app"  
+name = "ConfettiFlow"
+application_url = "https://confetti-flow.vercel.app"  
 embedded = true
 
 [build]
