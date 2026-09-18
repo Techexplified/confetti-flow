@@ -1,29 +1,27 @@
-// app/routes/app.jsx
-import { Outlet, useLoaderData, useRouteError } from "react-router-dom";
+import { Link, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  console.log("🟢 APP LOADER HIT");
-
-  const { authenticate } = await import("../shopify.server");
-  const { session } = await authenticate.admin(request);
-
-  console.log("🟢 SESSION SHOP:", session?.shop);
+  await authenticate.admin(request);
 
   return {
-    apiKey: process.env.SHOPIFY_API_KEY,
-    shop: session.shop,
+    apiKey: process.env.SHOPIFY_API_KEY || "",
   };
 };
 
 export default function App() {
-  console.log("🔵 APP COMPONENT RENDERED");
-
   const { apiKey } = useLoaderData();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
+      <ui-nav-menu>
+        <Link to="/app" rel="home">
+          Home
+        </Link>
+        <Link to="/app/additional">Additional page</Link>
+      </ui-nav-menu>
       <Outlet />
     </AppProvider>
   );

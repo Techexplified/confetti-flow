@@ -1,0 +1,19 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "16aa8b18a1361ff4a3edb9bca8ab9893"
+application_url = "https://example.com"
+embedded = true
+name = "ConfettiFlow"
+
+[webhooks]
+api_version = "2026-10"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_products,write_metaobjects,write_metaobject_definitions"
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+automatically_update_urls_on_dev = true

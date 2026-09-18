@@ -26,31 +26,10 @@ model Session {
 }
 
 model Shop {
-  id              String           @id @default(cuid())
-  name            String
-  shopifyShopId   String           @unique
-  accessToken     String
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  confettiConfigs ConfettiConfig[]
-}
-
-model ConfettiConfig {
-  id           String   @id @default(cuid())
-  shopDomain   String
-  shopId       String
-  title        String
-  type         String
-  config       Json
-  triggerEvent Json?
-  active       Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  shop         Shop     @relation(fields: [shopId], references: [id])
-}
-
-model playing_with_neon {
-  id    Int    @id @default(autoincrement())
-  name  String
-  value Float? @db.Real
+  id          String   @id @default(cuid())
+  shop        String   @unique
+  name        String?
+  isOnboarded Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
