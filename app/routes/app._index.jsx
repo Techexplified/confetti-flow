@@ -3,6 +3,10 @@ import { redirect, Form, useLoaderData, Link, useSearchParams, useFetcher } from
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
+// Server-side in-memory caches to prevent slow GraphQL calls on every action revalidation
+const appUrlCache = new Map(); // shop -> { url: string, time: number }
+const appEmbedCache = new Map(); // shop -> { enabled: boolean, time: number }
+
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -48,118 +52,125 @@ export const loader = async ({ request }) => {
     }
   }
 
-  // Sync the current tunnel/production URL into a shop metafield so the
-  // storefront Liquid block can read it and use it as the direct API endpoint.
-  // This bypasses the App Proxy which in dev still points to Vercel.
-  try {
-    const { admin } = await authenticate.admin(request);
-
-    // Prefer x-forwarded-host/proto (set by Shopify CLI) over raw request.url
-    // because request.url is the internal http://localhost:XXXX URL.
-    const fwdProto = request.headers.get("x-forwarded-proto") || "https";
-    const fwdHost  = request.headers.get("x-forwarded-host")  || new URL(request.url).host;
-    let appUrl = `${fwdProto}://${fwdHost}`;
-    // Force HTTPS for any cloudflare tunnel URL
-    if (appUrl.startsWith("http://") && !appUrl.includes("localhost")) {
-      appUrl = appUrl.replace("http://", "https://");
-    }
-
-    const shopQuery = await admin.graphql(`
-      query GetShopId {
-        shop {
-          id
-        }
-      }
-    `);
-    const shopJson = await shopQuery.json();
-    const shopGid = shopJson?.data?.shop?.id;
-
-    if (shopGid) {
-      await admin.graphql(
-        `mutation SetAppUrl($mf: [MetafieldsSetInput!]!) {
-          metafieldsSet(metafields: $mf) {
-            metafields { id value }
-            userErrors { field message }
-          }
-        }`,
-        {
-          variables: {
-            mf: [
-              {
-                namespace: "confetti_flow",
-                key: "app_url",
-                value: appUrl,
-                type: "single_line_text_field",
-                ownerId: shopGid,
-              },
-            ],
-          },
-        }
-      );
-      console.log("[ConfettiFlow] Synced app_url metafield:", appUrl);
-    }
-  } catch (e) {
-    // Non-fatal – storefront falls back to App Proxy
-    console.warn("[ConfettiFlow] Could not sync app_url metafield:", e.message);
+  // 1. Sync app_url only if not already synced in the last 10 minutes (or if URL changed)
+  const fwdProto = request.headers.get("x-forwarded-proto") || "https";
+  const fwdHost  = request.headers.get("x-forwarded-host")  || new URL(request.url).host;
+  let appUrl = `${fwdProto}://${fwdHost}`;
+  if (appUrl.startsWith("http://") && !appUrl.includes("localhost")) {
+    appUrl = appUrl.replace("http://", "https://");
   }
 
-  // Check if App Embed is enabled in the active theme
-  let isAppEmbedEnabled = true;
-  try {
-    const { admin } = await authenticate.admin(request);
-    const themeRes = await admin.graphql(`
-      query CheckAppEmbed {
-        themes(first: 5, roles: [MAIN]) {
-          nodes {
+  const cachedUrlEntry = appUrlCache.get(session.shop);
+  const isUrlFresh =
+    cachedUrlEntry &&
+    Date.now() - cachedUrlEntry.time < 10 * 60 * 1000 &&
+    cachedUrlEntry.url === appUrl;
+
+  if (!isUrlFresh) {
+    try {
+      const { admin } = await authenticate.admin(request);
+      const shopQuery = await admin.graphql(`
+        query GetShopId {
+          shop {
             id
-            name
-            role
-            files(first: 5, filenames: ["config/settings_data.json"]) {
-              nodes {
-                filename
-                body {
-                  ... on OnlineStoreThemeFileBodyText {
-                    content
+          }
+        }
+      `);
+      const shopJson = await shopQuery.json();
+      const shopGid = shopJson?.data?.shop?.id;
+
+      if (shopGid) {
+        await admin.graphql(
+          `mutation SetAppUrl($mf: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $mf) {
+              metafields { id value }
+              userErrors { field message }
+            }
+          }`,
+          {
+            variables: {
+              mf: [
+                {
+                  namespace: "confetti_flow",
+                  key: "app_url",
+                  value: appUrl,
+                  type: "single_line_text_field",
+                  ownerId: shopGid,
+                },
+              ],
+            },
+          }
+        );
+        appUrlCache.set(session.shop, { url: appUrl, time: Date.now() });
+        console.log("[ConfettiFlow] Synced app_url metafield:", appUrl);
+      }
+    } catch (e) {
+      console.warn("[ConfettiFlow] Could not sync app_url metafield:", e.message);
+    }
+  }
+
+  // 2. Check if App Embed is enabled in the active theme (cached for 60s)
+  let isAppEmbedEnabled = true;
+  const cachedEmbed = appEmbedCache.get(session.shop);
+  if (cachedEmbed && Date.now() - cachedEmbed.time < 60 * 1000) {
+    isAppEmbedEnabled = cachedEmbed.enabled;
+  } else {
+    try {
+      const { admin } = await authenticate.admin(request);
+      const themeRes = await admin.graphql(`
+        query CheckAppEmbed {
+          themes(first: 5, roles: [MAIN]) {
+            nodes {
+              id
+              name
+              role
+              files(first: 5, filenames: ["config/settings_data.json"]) {
+                nodes {
+                  filename
+                  body {
+                    ... on OnlineStoreThemeFileBodyText {
+                      content
+                    }
                   }
                 }
               }
             }
           }
         }
-      }
-    `);
-    const themeJson = await themeRes.json();
-    const mainTheme = themeJson?.data?.themes?.nodes?.[0];
-    if (mainTheme) {
-      const content = mainTheme.files?.nodes?.[0]?.body?.content;
-      if (content) {
-        const cleaned = content.replace(/\/\*[\s\S]*?\*\//g, "").trim();
-        const parsed = JSON.parse(cleaned);
-        const blocks = parsed?.current?.blocks || {};
+      `);
+      const themeJson = await themeRes.json();
+      const mainTheme = themeJson?.data?.themes?.nodes?.[0];
+      if (mainTheme) {
+        const content = mainTheme.files?.nodes?.[0]?.body?.content;
+        if (content) {
+          const cleaned = content.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+          const parsed = JSON.parse(cleaned);
+          const blocks = parsed?.current?.blocks || {};
 
-        let found = false;
-        let enabled = false;
+          let found = false;
+          let enabled = false;
 
-        for (const [id, block] of Object.entries(blocks)) {
-          if (
-            block &&
-            typeof block.type === "string" &&
-            (block.type.includes("confetti-embed") || block.type.includes("confettiflow"))
-          ) {
-            found = true;
-            if (!block.disabled) {
-              enabled = true;
+          for (const [id, block] of Object.entries(blocks)) {
+            if (
+              block &&
+              typeof block.type === "string" &&
+              (block.type.includes("confetti-embed") || block.type.includes("confettiflow"))
+            ) {
+              found = true;
+              if (!block.disabled) {
+                enabled = true;
+              }
+              break;
             }
-            break;
           }
-        }
 
-        // isAppEmbedEnabled is true only if the block exists and is not disabled
-        isAppEmbedEnabled = found && enabled;
+          isAppEmbedEnabled = found && enabled;
+        }
       }
+      appEmbedCache.set(session.shop, { enabled: isAppEmbedEnabled, time: Date.now() });
+    } catch (e) {
+      console.warn("[ConfettiFlow] Could not check app embed status:", e.message);
     }
-  } catch (e) {
-    console.warn("[ConfettiFlow] Could not check app embed status:", e.message);
   }
 
   return {
@@ -323,20 +334,45 @@ export default function AppIndex() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [activeMenuId]);
 
+  // Optimistic status state for instant UI toggle response (0ms)
+  const [optimisticStatusMap, setOptimisticStatusMap] = useState({});
+
+  // When dbEffects updates from server revalidation, clean up matching keys
+  useEffect(() => {
+    setOptimisticStatusMap((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const eff of dbEffects) {
+        if (eff.id in next && (eff.status === "active") === next[eff.id]) {
+          delete next[eff.id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [dbEffects]);
+
   // Sample fallback template effects if user has not created any yet
   const sampleEffects = [  ];
 
   const effects = dbEffects.length > 0
-    ? dbEffects.map((eff) => ({
-        id: eff.id,
-        name: eff.name,
-        subtitle: `${eff.mode} mode • ${eff.shape} • ${eff.duration}s`,
-        triggerEvent: eff.triggerEvent,
-        preview: <DynamicPreview shape={eff.shape} colors={eff.colors} />,
-        active: eff.status === "active",
-        isSample: false,
-        preMade: Boolean(eff.preMade),
-      }))
+    ? dbEffects.map((eff) => {
+        const isLocallyOverridden = eff.id in optimisticStatusMap;
+        const active = isLocallyOverridden
+          ? optimisticStatusMap[eff.id]
+          : eff.status === "active";
+
+        return {
+          id: eff.id,
+          name: eff.name,
+          subtitle: `${eff.mode} mode • ${eff.shape} • ${eff.duration}s`,
+          triggerEvent: eff.triggerEvent,
+          preview: <DynamicPreview shape={eff.shape} colors={eff.colors} />,
+          active,
+          isSample: false,
+          preMade: Boolean(eff.preMade),
+        };
+      })
     : sampleEffects;
 
   // Toggle active status
@@ -345,6 +381,16 @@ export default function AppIndex() {
       alert("This is a template preview. Click '+ New effect' to create your own live effect!");
       return;
     }
+
+    const nextActive = !eff.active;
+
+    // 1. Instant optimistic UI update (0ms!)
+    setOptimisticStatusMap((prev) => ({
+      ...prev,
+      [eff.id]: nextActive,
+    }));
+
+    // 2. Submit to server in background
     fetcher.submit(
       {
         intent: "toggle_status",
@@ -898,12 +944,12 @@ export default function AppIndex() {
         <div className="pt-2 flex justify-end">
           <Form method="post">
             <input type="hidden" name="intent" value="reset_onboarding" />
-            <button
+            {/* <button
               type="submit"
               className="text-xs text-slate-400 hover:text-slate-600 font-medium underline transition-colors cursor-pointer"
             >
               Reset to Onboarding (Dev tool)
-            </button>
+            </button> */}
           </Form>
         </div>
       </div>
