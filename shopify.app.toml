@@ -21,7 +21,12 @@ api_version = "2026-01"
   uri = "/webhooks/app/scopes_update"
 
 [access_scopes]
-scopes = "write_products"
+scopes = "write_products,read_themes"
 
 [auth]
 redirect_urls = [ "https://confetti-maker.vercel.app/auth/callback" ]  # ← Also check this is correct
+
+[app_proxy]
+url = "https://confetti-flow.vercel.app/api/storefront"
+subpath = "confetti"
+prefix = "apps"

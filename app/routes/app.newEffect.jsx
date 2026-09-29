@@ -1,65 +1,311 @@
 import { useState, useEffect, useRef } from "react";
-import { Link, useSearchParams, useNavigate } from "react-router";
+import { Link, useSearchParams, useNavigate, useSubmit, useNavigation, redirect, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
+import { getStorefrontThemeColors } from "../services/theme.server";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
-  return null;
+  const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const id = url.searchParams.get("id");
+
+  let effect = null;
+  if (id) {
+    effect = await prisma.confettiEffect.findFirst({
+      where: { id, shop: session.shop },
+    });
+    // Premade effects cannot be edited
+    let isPreMade = Boolean(effect?.preMade);
+    if (effect && effect.preMade === undefined) {
+      try {
+        const raw = await prisma.$queryRawUnsafe(
+          'SELECT "preMade" FROM "ConfettiEffect" WHERE id = $1',
+          id
+        );
+        if (raw && raw[0]) {
+          isPreMade = Boolean(raw[0].preMade);
+        }
+      } catch (e) {}
+    }
+    if (effect && effect.customSound === undefined) {
+      try {
+        const rawSound = await prisma.$queryRawUnsafe(
+          'SELECT "customSound" FROM "ConfettiEffect" WHERE id = $1',
+          id
+        );
+        if (rawSound && rawSound[0]) {
+          effect.customSound = rawSound[0].customSound;
+        }
+      } catch (e) {}
+    }
+    if (effect && isPreMade) {
+      const cleanParams = new URLSearchParams(url.searchParams);
+      cleanParams.delete("id");
+      const query = cleanParams.toString();
+      throw redirect(`/app${query ? `?${query}` : ""}`);
+    }
+  }
+
+  const themeBrand = await getStorefrontThemeColors({
+    shop: session.shop,
+    accessToken: session.accessToken,
+  });
+
+  return { shop: session.shop, effect, themeBrand };
 };
 
 export const action = async ({ request }) => {
-  await authenticate.admin(request);
-  return null;
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+
+  const effectId = formData.get("effectId")?.toString() || formData.get("id")?.toString();
+  const name = (formData.get("name") || "Untitled celebration").toString();
+  const status = (formData.get("status") || "draft").toString();
+  const triggerEvent = (formData.get("triggerEvent") || "Order created").toString();
+
+  let triggerConditions = {};
+  try {
+    triggerConditions = JSON.parse(formData.get("triggerConditions")?.toString() || "{}");
+  } catch (e) {
+    triggerConditions = {};
+  }
+
+  const shape = (formData.get("shape") || "circle").toString();
+  const customImage = formData.get("customImage") ? formData.get("customImage").toString() : null;
+  const useBrandColor = formData.get("useBrandColor") === "true";
+
+  let colors = [];
+  try {
+    colors = JSON.parse(formData.get("colors")?.toString() || "[]");
+  } catch (e) {
+    colors = ["#e11d48", "#f472b6", "#fbbf24", "#10b981", "#3b82f6", "#8b5cf6"];
+  }
+
+  const mode = (formData.get("mode") || "Burst").toString();
+  const position = (formData.get("position") || "Full screen").toString();
+  const duration = parseInt(formData.get("duration")?.toString() || "3", 10);
+  const intensity = parseInt(formData.get("intensity")?.toString() || "2", 10);
+  const soundEnabled = formData.get("soundEnabled") === "true";
+  const soundType = (formData.get("soundType") || "Fairy magic sparkle").toString();
+  const customSound = formData.get("customSound") ? formData.get("customSound").toString() : null;
+
+  const safePayload = {
+    name,
+    status,
+    triggerEvent,
+    triggerConditions,
+    shape,
+    customImage,
+    useBrandColor,
+    colors,
+    mode,
+    position,
+    duration,
+    intensity,
+    soundEnabled,
+    soundType,
+  };
+
+  let targetId = effectId;
+  if (effectId) {
+    await prisma.confettiEffect.updateMany({
+      where: { id: effectId, shop: session.shop },
+      data: safePayload,
+    });
+  } else {
+    const created = await prisma.confettiEffect.create({
+      data: {
+        shop: session.shop,
+        ...safePayload,
+      },
+    });
+    targetId = created.id;
+  }
+
+  // Update customSound directly in PostgreSQL to avoid Prisma Client DMMF validation error
+  if (targetId) {
+    try {
+      await prisma.$executeRawUnsafe(
+        'UPDATE "ConfettiEffect" SET "customSound" = $1 WHERE id = $2',
+        customSound,
+        targetId
+      );
+    } catch (sqlErr) {
+      console.error("[ConfettiFlow] Failed to set customSound via SQL:", sqlErr);
+    }
+  }
+
+  // Strip `id` (and `effectId`) from the redirect so it doesn't appear on the dashboard URL
+  const url = new URL(request.url);
+  url.searchParams.delete("id");
+  url.searchParams.delete("effectId");
+  const cleanParams = url.searchParams.toString();
+  return redirect(`/app${cleanParams ? `?${cleanParams}` : ""}`);
 };
 
+// Sleek animated SVG spinner for button loading states
+function ButtonSpinner({ className = "w-4 h-4 text-current" }) {
+  return (
+    <svg
+      className={`animate-spin ${className}`}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="3.5"
+      />
+      <path
+        className="opacity-95"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+}
+
 export default function NewEffect() {
+  const loaderData = useLoaderData();
+  const effect = loaderData?.effect || null;
+  const themeBrand = loaderData?.themeBrand;
+  const isEditing = Boolean(effect?.id);
+
+  // Dynamic theme brand colors
+  const detectedBrandColors =
+    themeBrand?.brandColors && themeBrand.brandColors.length > 0
+      ? themeBrand.brandColors
+      : ["#008060", "#004c3f", "#479ccf", "#0099e6", "#002aff"];
+  const brandPrimaryColor = themeBrand?.primaryColor || detectedBrandColors[0];
+  const themeName = themeBrand?.themeName || "Store theme";
+
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryStr = searchParams.toString() ? `?${searchParams.toString()}` : "";
-  const dashboardUrl = `/app${queryStr}`;
+  const dashboardUrl = `/app`;
 
-  // Form State matching the wireframe
-  const [effectName, setEffectName] = useState("");
-  const [triggerEvent, setTriggerEvent] = useState("Order created");
+  // Form State matching the wireframe or existing effect
+  const [effectName, setEffectName] = useState(effect?.name || "");
+  const [triggerEvent, setTriggerEvent] = useState(effect?.triggerEvent || "Order created");
 
   // Trigger Conditions
-  const [productTagOp, setProductTagOp] = useState("Contains");
-  const [productTagVal, setProductTagVal] = useState("");
+  const tc =
+    typeof effect?.triggerConditions === "object" && effect?.triggerConditions !== null
+      ? effect.triggerConditions
+      : {};
 
-  const [discountOp, setDiscountOp] = useState("Contains");
-  const [discountVal, setDiscountVal] = useState("");
+  const [productTagOp, setProductTagOp] = useState(tc.productTagOp || "Contains");
+  const [productTagVal, setProductTagVal] = useState(tc.productTagVal || "");
 
-  const [orderValueMin, setOrderValueMin] = useState("");
-  const [firstTimeBuyer, setFirstTimeBuyer] = useState("Yes (First-time buyers only)");
-  const [quantityMin, setQuantityMin] = useState("");
-  const [loyaltyMilestone, setLoyaltyMilestone] = useState("");
+  const [discountOp, setDiscountOp] = useState(tc.discountOp || "Contains");
+  const [discountVal, setDiscountVal] = useState(tc.discountVal || "");
 
-  // Shape state: 'circle' | 'star' | 'heart' | 'triangle' | 'text'
-  const [selectedShape, setSelectedShape] = useState("circle");
-  const [customImage, setCustomImage] = useState(null);
+  const [orderValueMin, setOrderValueMin] = useState(tc.orderValueMin || "");
+  const [firstTimeBuyer, setFirstTimeBuyer] = useState(tc.firstTimeBuyer || "Yes (First-time buyers only)");
+  const [quantityMin, setQuantityMin] = useState(tc.quantityMin || "");
+  const [loyaltyMilestone, setLoyaltyMilestone] = useState(tc.loyaltyMilestone || "");
+
+  // Shape state: 'circle' | 'star' | 'heart' | 'triangle' | 'text' | 'custom'
+  const [selectedShape, setSelectedShape] = useState(effect?.shape || "circle");
+  const [customImage, setCustomImage] = useState(effect?.customImage || null);
 
   // Colors state
-  const [useBrandColor, setUseBrandColor] = useState(true);
-  const [customColors, setCustomColors] = useState([
-    "#e11d48", // Magenta
-    "#f472b6", // Pink
-    "#fbbf24", // Yellow/Gold
-    "#10b981", // Mint/Teal
-    "#3b82f6", // Blue
-    "#8b5cf6", // Purple
-  ]);
+  const [useBrandColor, setUseBrandColor] = useState(
+    effect?.useBrandColor !== undefined ? effect.useBrandColor : true
+  );
+  const [customColors, setCustomColors] = useState(
+    Array.isArray(effect?.colors) && effect.colors.length > 0
+      ? effect.colors
+      : [
+          "#e11d48", // Rose / Crimson
+          "#fbbf24", // Yellow / Gold
+          "#6366f1", // Indigo / Purple
+        ]
+  );
 
   // Mode & Position state
-  const [mode, setMode] = useState("Burst");
-  const [position, setPosition] = useState("Full screen");
+  const [mode, setMode] = useState(effect?.mode || "Burst");
+  const [position, setPosition] = useState(effect?.position || "Full screen");
 
   // Duration & Intensity state
-  const [duration, setDuration] = useState(3);
-  const [intensity, setIntensity] = useState(2); // 1: Low, 2: Medium, 3: High, 4: Extreme
+  const [duration, setDuration] = useState(Number(effect?.duration) || 3);
+  const [intensity, setIntensity] = useState(Number(effect?.intensity) || 2); // 1: Low, 2: Medium, 3: High, 4: Extreme
 
   // Sound pairing state
-  const [soundEnabled, setSoundEnabled] = useState(false);
-  const [soundType, setSoundType] = useState("Soft chime");
+  const [soundEnabled, setSoundEnabled] = useState(Boolean(effect?.soundEnabled));
+  const [soundType, setSoundType] = useState(effect?.soundType || "Fairy magic sparkle");
+  const [customSound, setCustomSound] = useState(effect?.customSound || null);
+  const [customSoundName, setCustomSoundName] = useState(effect?.customSound ? "Custom sound active" : "");
+  const [customSoundDuration, setCustomSoundDuration] = useState(null);
+  const [soundError, setSoundError] = useState("");
+
+  // Sync state whenever the loaded effect changes (handles navigating between edit ↔ new)
+  useEffect(() => {
+    if (effect) {
+      // EDIT mode: populate all fields from the existing effect
+      setEffectName(effect.name || "");
+      setTriggerEvent(effect.triggerEvent || "Order created");
+      const c =
+        typeof effect.triggerConditions === "object" && effect.triggerConditions !== null
+          ? effect.triggerConditions
+          : {};
+      setProductTagOp(c.productTagOp || "Contains");
+      setProductTagVal(c.productTagVal || "");
+      setDiscountOp(c.discountOp || "Contains");
+      setDiscountVal(c.discountVal || "");
+      setOrderValueMin(c.orderValueMin || "");
+      setFirstTimeBuyer(c.firstTimeBuyer || "Yes (First-time buyers only)");
+      setQuantityMin(c.quantityMin || "");
+      setLoyaltyMilestone(c.loyaltyMilestone || "");
+      setSelectedShape(effect.shape || "circle");
+      setCustomImage(effect.customImage || null);
+      setUseBrandColor(effect.useBrandColor !== undefined ? effect.useBrandColor : true);
+      if (Array.isArray(effect.colors) && effect.colors.length > 0) {
+        setCustomColors(effect.colors);
+      }
+      setMode(effect.mode || "Burst");
+      setPosition(effect.position || "Full screen");
+      setDuration(Number(effect.duration) || 3);
+      setIntensity(Number(effect.intensity) || 2);
+      setSoundEnabled(Boolean(effect.soundEnabled));
+      setSoundType(effect.soundType || "Fairy magic sparkle");
+      setCustomSound(effect.customSound || null);
+      setCustomSoundName(effect.customSound ? "Custom celebration sound" : "");
+      setCustomSoundDuration(null);
+      setSoundError("");
+    } else {
+      // CREATE mode: reset all fields back to fresh defaults
+      setEffectName("");
+      setTriggerEvent("Order created");
+      setProductTagOp("Contains");
+      setProductTagVal("");
+      setDiscountOp("Contains");
+      setDiscountVal("");
+      setOrderValueMin("");
+      setFirstTimeBuyer("Yes (First-time buyers only)");
+      setQuantityMin("");
+      setLoyaltyMilestone("");
+      setSelectedShape("circle");
+      setCustomImage(null);
+      setUseBrandColor(true);
+      setCustomColors(["#e11d48", "#fbbf24", "#6366f1"]);
+      setMode("Burst");
+      setPosition("Full screen");
+      setDuration(3);
+      setIntensity(2);
+      setSoundEnabled(false);
+      setSoundType("Fairy magic sparkle");
+      setCustomSound(null);
+      setCustomSoundName("");
+      setCustomSoundDuration(null);
+      setSoundError("");
+    }
+  }, [effect]);
 
   // Preview Device: 'desktop' | 'mobile'
   const [previewDevice, setPreviewDevice] = useState("desktop");
@@ -67,6 +313,7 @@ export default function NewEffect() {
   // Live burst trigger state
   const [burstCount, setBurstCount] = useState(1);
   const [isSaving, setIsSaving] = useState(false);
+  const [savingAction, setSavingAction] = useState(null); // 'draft' | 'published' | null
   const [toastMessage, setToastMessage] = useState(null);
 
   const intensityMap = {
@@ -84,17 +331,53 @@ export default function NewEffect() {
     Fireworks: 'Multiple smaller bursts firing in sequence at different points on screen, rather than one single burst. The most visually rich option, best reserved for bigger milestones.',
   };
 
+  // Available screen positions tailored per confetti mode
+  const MODE_POSITIONS = {
+    Burst: ["Full screen", "Center", "Top", "Left side", "Right side"],
+    Falling: ["Full screen", "Center", "Top", "Left side", "Right side"],
+    Fountain: ["Full screen", "Bottom", "Left side", "Right side"],
+    Cannon: ["Full screen", "Left side", "Right side"],
+    Fireworks: ["Full screen"],
+  };
+
+  // Ensure selected position is always valid for the active mode
+  useEffect(() => {
+    const validPositions = MODE_POSITIONS[mode] || ["Full screen"];
+    if (!validPositions.includes(position)) {
+      setPosition(validPositions[0]);
+    }
+  }, [mode, position]);
+
   const triggerBurst = () => {
     setBurstCount((prev) => prev + 1);
     if (soundEnabled) {
-      playSound(soundType);
+      playSound(soundType, customSound);
     }
   };
 
   const handleCustomColorAdd = (e) => {
     const newColor = e.target.value;
-    if (newColor && !customColors.includes(newColor)) {
-      setCustomColors([...customColors, newColor]);
+    if (newColor && customColors.length < 5) {
+      setCustomColors((prev) => [...prev, newColor]);
+      setBurstCount((prev) => prev + 1);
+    }
+  };
+
+  const handleCustomColorChange = (index, newColor) => {
+    if (!newColor) return;
+    setCustomColors((prev) => {
+      const updated = [...prev];
+      updated[index] = newColor;
+      return updated;
+    });
+    setBurstCount((prev) => prev + 1);
+  };
+
+  const handleCustomColorRemove = (index, e) => {
+    e.stopPropagation();
+    if (customColors.length > 1) {
+      setCustomColors((prev) => prev.filter((_, i) => i !== index));
+      setBurstCount((prev) => prev + 1);
     }
   };
 
@@ -110,16 +393,133 @@ export default function NewEffect() {
     }
   };
 
+  const handleSoundUpload = (e) => {
+    setSoundError("");
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // 1. Validate File Type
+    const validTypes = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/ogg", "audio/x-m4a", "audio/m4a", "audio/aac"];
+    const validExts = [".mp3", ".wav", ".ogg", ".m4a", ".aac"];
+    const fileExt = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
+
+    if (!validTypes.includes(file.type) && !validExts.includes(fileExt)) {
+      setSoundError("Invalid audio format. Please upload an MP3, WAV, OGG, or M4A file.");
+      return;
+    }
+
+    // 2. Validate File Size (Max 250 KB)
+    const MAX_SIZE_BYTES = 250 * 1024;
+    if (file.size > MAX_SIZE_BYTES) {
+      setSoundError(`Sound file is too large (${(file.size / 1024).toFixed(1)} KB). Maximum allowed size is 250 KB to ensure instantaneous playback without delay.`);
+      return;
+    }
+
+    // 3. Validate Audio Duration asynchronously (Max 5.0 seconds)
+    const audioObj = new Audio();
+    const objectUrl = URL.createObjectURL(file);
+    audioObj.src = objectUrl;
+
+    audioObj.onloadedmetadata = () => {
+      URL.revokeObjectURL(objectUrl);
+      const durationSec = audioObj.duration;
+      if (durationSec > 5.5) {
+        setSoundError(`Sound is too long (${durationSec.toFixed(1)}s). Celebration sound must be 5 seconds or less.`);
+        return;
+      }
+
+      // 4. File passed all checks -> Read as Base64 data URL
+      const reader = new FileReader();
+      reader.onload = (loadEvt) => {
+        const base64Data = loadEvt.target?.result;
+        setCustomSound(base64Data);
+        setCustomSoundName(file.name);
+        setCustomSoundDuration(durationSec.toFixed(1));
+        setSoundType("Custom sound");
+        setSoundError("");
+        if (soundEnabled) {
+          playSound("Custom sound", base64Data);
+        }
+      };
+      reader.readAsDataURL(file);
+    };
+
+    audioObj.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      setSoundError("Could not decode audio file. Please check that the file is not corrupted.");
+    };
+  };
+
+  const handleRemoveCustomSound = () => {
+    setCustomSound(null);
+    setCustomSoundName("");
+    setCustomSoundDuration(null);
+    setSoundError("");
+    setSoundType("Fairy magic sparkle");
+  };
+
+  const submit = useSubmit();
+  const navigation = useNavigation();
+
+  // Only consider submitting if user explicitly initiated save/publish (never during link navigations)
+  const isPublishLoading =
+    savingAction === "published" &&
+    (isSaving || navigation.state === "submitting" || navigation.state === "loading");
+  const isDraftLoading =
+    savingAction === "draft" &&
+    (isSaving || navigation.state === "submitting" || navigation.state === "loading");
+  const isSubmitting = isPublishLoading || isDraftLoading;
+
+  // Reset saving state if navigation finishes or errors back to idle
+  useEffect(() => {
+    if (navigation.state === "idle" && !navigation.formData) {
+      setIsSaving(false);
+      setSavingAction(null);
+    }
+  }, [navigation.state, navigation.formData]);
+
   const handleSave = (status = "draft") => {
+    setSavingAction(status);
     setIsSaving(true);
     setToastMessage(
       status === "published"
-        ? "🎉 Effect published successfully!"
+        ? isEditing
+          ? "🎉 Effect updated & published!"
+          : "🎉 Effect published successfully!"
+        : isEditing
+        ? "Effect changes saved as draft!"
         : "Effect saved as draft!"
     );
-    setTimeout(() => {
-      navigate(dashboardUrl);
-    }, 1200);
+
+    const payload = {
+      ...(effect?.id ? { effectId: effect.id, id: effect.id } : {}),
+      name: effectName.trim() || "Untitled celebration",
+      status: status === "published" ? "active" : "draft",
+      triggerEvent,
+      triggerConditions: JSON.stringify({
+        productTagOp,
+        productTagVal,
+        discountOp,
+        discountVal,
+        orderValueMin,
+        firstTimeBuyer,
+        quantityMin,
+        loyaltyMilestone,
+      }),
+      shape: selectedShape,
+      customImage: customImage || "",
+      useBrandColor: String(useBrandColor),
+      colors: JSON.stringify(useBrandColor ? detectedBrandColors : customColors),
+      mode,
+      position,
+      duration: String(duration),
+      intensity: String(intensity),
+      soundEnabled: String(soundEnabled),
+      soundType,
+      customSound: customSound || "",
+    };
+
+    submit(payload, { method: "post" });
   };
 
   return (
@@ -164,10 +564,12 @@ export default function NewEffect() {
             <span>Back to dashboard</span>
           </Link>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#0f172a] tracking-tight">
-            Create new effect
+            {isEditing ? "Edit effect" : "Create new effect"}
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 font-normal mt-0.5">
-            Build it from scratch, every setting below is yours to customise.
+            {isEditing
+              ? `Update settings and customize your "${effect?.name || "celebration"}" effect.`
+              : "Build it from scratch, every setting below is yours to customise."}
           </p>
         </div>
 
@@ -214,7 +616,7 @@ export default function NewEffect() {
                   onChange={(e) => setTriggerEvent(e.target.value)}
                   className="w-full appearance-none px-3.5 py-2.5 bg-slate-50/70 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-400/30 focus:border-purple-400 transition-all pr-9 cursor-pointer font-medium"
                 >
-                  <option value="Order created">Order created</option>
+                  {/* <option value="Order created">Order created</option> */}
                   <option value="Page viewed">Page viewed</option>
                   <option value="Cart updated">Cart updated</option>
                   <option value="Customer created">Customer created</option>
@@ -652,57 +1054,194 @@ export default function NewEffect() {
                 Brand color
               </label>
               <div
-                onClick={() => setUseBrandColor(!useBrandColor)}
-                className="border border-slate-200 rounded-2xl p-3 flex items-center justify-between bg-slate-50/50 hover:bg-slate-50 transition-colors cursor-pointer"
+                onClick={() => {
+                  setUseBrandColor(!useBrandColor);
+                  setBurstCount((prev) => prev + 1);
+                }}
+                className="border border-slate-200 rounded-2xl p-3.5 bg-slate-50/50 hover:bg-slate-50 transition-colors cursor-pointer space-y-3"
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-6 h-6 rounded-full bg-[#8b5cf6] ring-2 ring-purple-300 ring-offset-1 flex items-center justify-center shrink-0"></div>
-                  <div>
-                    <span className="block text-xs font-bold text-slate-800">
-                      Use my store&apos;s brand colors
-                    </span>
-                    <span className="block text-[11px] text-slate-500 font-medium">
-                      Pulled automatically from your theme
-                    </span>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-8 h-8 rounded-full border-2 border-white ring-2 ring-slate-200/80 shadow-xs flex items-center justify-center shrink-0 transition-colors duration-200"
+                      style={{ backgroundColor: brandPrimaryColor }}
+                    ></div>
+                    <div>
+                      <span className="block text-xs font-bold text-slate-800 flex items-center gap-2">
+                        <span>Use my store&apos;s brand colors</span>
+                        {useBrandColor && (
+                          <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                            {themeName}
+                          </span>
+                        )}
+                      </span>
+                      <span className="block text-[11px] text-slate-500 font-medium mt-0.5">
+                        {useBrandColor
+                          ? `Confetti matches your storefront palette (${themeName})`
+                          : "Uncheck to configure custom colors below"}
+                      </span>
+                    </div>
                   </div>
+
+                  <input
+                    type="checkbox"
+                    checked={useBrandColor}
+                    onChange={(e) => {
+                      setUseBrandColor(e.target.checked);
+                      setBurstCount((prev) => prev + 1);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-5 h-5 text-purple-600 rounded border-slate-300 focus:ring-purple-400 cursor-pointer accent-[#7c3aed] shrink-0"
+                  />
                 </div>
 
-                <input
-                  type="checkbox"
-                  checked={useBrandColor}
-                  onChange={(e) => setUseBrandColor(e.target.checked)}
-                  className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-400 cursor-pointer"
-                />
+                {/* Detected Theme Palette Strip when active */}
+                {useBrandColor && (
+                  <div className="pt-2.5 border-t border-slate-200/60 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10.5px] font-semibold text-slate-400 mr-0.5 uppercase tracking-wider">
+                        Storefront Palette:
+                      </span>
+                      {detectedBrandColors.map((color, idx) => (
+                        <div
+                          key={idx}
+                          className="w-5 h-5 rounded-full border border-black/10 shadow-2xs hover:scale-115 transition-transform"
+                          style={{ backgroundColor: color }}
+                          title={`Brand color ${idx + 1}: ${color}`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[11px] text-slate-400 font-mono font-medium">
+                      {brandPrimaryColor}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Field: Custom Colors */}
-            <div className="space-y-2 pt-1">
-              <label className="block text-xs font-bold text-slate-800">
-                Custom colors
-              </label>
+            <div className={`space-y-2.5 pt-1 transition-opacity ${useBrandColor ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <label className="block text-xs font-bold text-slate-800">
+                    Custom colors
+                  </label>
+                  <span className="text-[11px] font-semibold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full border border-purple-200">
+                    {customColors.length}/5 colors
+                  </span>
+                </div>
+                {useBrandColor && (
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    (Disabled while using brand colors)
+                  </span>
+                )}
+              </div>
+                {/* {customColors.length >= 5 ? (
+                  <span className="text-[10px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                    Max 5 colors reached
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500 font-medium">
+                    Add up to 5 colors
+                  </span>
+                )} */}
+
+              {/* Swatches and Add button */}
               <div className="flex items-center gap-2.5 flex-wrap">
                 {customColors.map((color, idx) => (
                   <div
                     key={idx}
-                    className="w-7 h-7 rounded-full transition-transform hover:scale-110 shadow-sm cursor-pointer border border-black/10"
-                    style={{ backgroundColor: color }}
-                    title={color}
-                  />
+                    className="relative group"
+                    title={`Color ${idx + 1}: ${color} (Click to edit)`}
+                  >
+                    <div
+                      className="w-8 h-8 rounded-full shadow-xs border-2 border-white ring-1 ring-slate-300 transition-all group-hover:scale-110 group-hover:ring-purple-400 cursor-pointer flex items-center justify-center overflow-hidden relative"
+                      style={{ backgroundColor: color }}
+                    >
+                      <input
+                        type="color"
+                        value={color}
+                        onChange={(e) => handleCustomColorChange(idx, e.target.value)}
+                        className="opacity-0 absolute inset-0 w-full h-full cursor-pointer"
+                        title="Click to edit color"
+                      />
+                    </div>
+
+                    {/* Delete color button (shown on hover if > 1 color) */}
+                    {customColors.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleCustomColorRemove(idx, e)}
+                        className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-slate-800 hover:bg-rose-500 text-white rounded-full flex items-center justify-center text-[11px] font-bold shadow-sm opacity-0 group-hover:opacity-100 transition-opacity z-10 cursor-pointer leading-none"
+                        title="Remove color"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 ))}
 
-                {/* Add Custom Color Button with Hidden Color Picker */}
-                <label
-                  title="Add custom color"
-                  className="w-7 h-7 rounded-full border-2 border-dashed border-purple-400 text-purple-600 hover:bg-purple-50 flex items-center justify-center font-bold text-xs cursor-pointer transition-colors"
-                >
-                  +
-                  <input
-                    type="color"
-                    onChange={handleCustomColorAdd}
-                    className="hidden"
-                  />
-                </label>
+                {/* Add Custom Color Button (Active if < 5, max badge if 5) */}
+                {customColors.length < 5 ? (
+                  <label
+                    title={`Add custom color (${customColors.length}/5)`}
+                    className="relative w-8 h-8 rounded-full border-2 border-dashed border-purple-400 text-purple-600 hover:bg-purple-50 hover:border-purple-600 flex items-center justify-center font-bold text-sm cursor-pointer transition-all hover:scale-105"
+                  >
+                    <span className="leading-none select-none">+</span>
+                    <input
+                      key={customColors.length}
+                      type="color"
+                      defaultValue="#10b981"
+                      onChange={handleCustomColorAdd}
+                      className="opacity-0 absolute inset-0 w-full h-full cursor-pointer"
+                    />
+                  </label>
+                ) : (
+                  <div
+                    title="Maximum of 5 custom colors reached"
+                    className="h-8 px-2.5 rounded-full border border-slate-200 bg-slate-100/80 text-slate-400 flex items-center justify-center text-[11px] font-semibold select-none cursor-not-allowed"
+                  >
+                    5/5 Max
+                  </div>
+                )}
+              </div>
+
+              {/* Interactive tip */}
+              <p className="text-[11px] text-slate-400 leading-tight">
+                Click any circle to edit &bull; Hover to delete &bull; Up to 5 colors
+              </p>
+
+              {/* Quick Palette Presets */}
+              <div className="pt-1 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-slate-400 font-medium">Presets:</span>
+                {[
+                  { name: "Rainbow", colors: ["#ef4444", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6"] },
+                  { name: "Pastel", colors: ["#fb7185", "#f472b6", "#c084fc", "#fde047", "#67e8f9"] },
+                  { name: "Gold Glow", colors: ["#d97706", "#f59e0b", "#fbbf24", "#fef08a", "#cbd5e1"] },
+                  { name: "Ocean Breeze", colors: ["#0284c7", "#06b6d4", "#14b8a6", "#3b82f6", "#6366f1"] },
+                ].map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => {
+                      setCustomColors(preset.colors);
+                      setBurstCount((prev) => prev + 1);
+                    }}
+                    className="text-[11px] font-medium px-2 py-0.5 rounded-lg bg-slate-100/90 hover:bg-purple-50 hover:text-purple-700 text-slate-600 transition-colors border border-slate-200 flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    title={`Apply ${preset.name} palette (5 colors)`}
+                  >
+                    <div className="flex -space-x-1">
+                      {preset.colors.slice(0, 3).map((c, i) => (
+                        <span
+                          key={i}
+                          className="w-2.5 h-2.5 rounded-full border border-white"
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                    <span>{preset.name}</span>
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -717,7 +1256,12 @@ export default function NewEffect() {
                   <select
                     value={mode}
                     onChange={(e) => {
-                      setMode(e.target.value);
+                      const newMode = e.target.value;
+                      setMode(newMode);
+                      const validPositions = MODE_POSITIONS[newMode] || ["Full screen"];
+                      if (!validPositions.includes(position)) {
+                        setPosition(validPositions[0]);
+                      }
                       setBurstCount((prev) => prev + 1);
                       if (soundEnabled) playSound(soundType);
                     }}
@@ -751,13 +1295,11 @@ export default function NewEffect() {
                     }}
                     className="w-full appearance-none px-3 py-2 bg-slate-50/70 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-400/30 focus:border-purple-400 transition-all pr-8 cursor-pointer font-medium"
                   >
-                    <option value="Full screen">Full screen</option>
-                    <option value="Center">Center</option>
-                    <option value="Around button/element">Around button/element</option>
-                    <option value="Top">Top</option>
-                    <option value="Bottom">Bottom</option>
-                    <option value="Left side">Left side</option>
-                    <option value="Right side">Right side</option>
+                    {(MODE_POSITIONS[mode] || ["Full screen"]).map((pos) => (
+                      <option key={pos} value={pos}>
+                        {pos}
+                      </option>
+                    ))}
                   </select>
                   <div className="absolute inset-y-0 right-0 flex items-center px-2.5 pointer-events-none text-slate-400">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -820,7 +1362,7 @@ export default function NewEffect() {
             </div>
 
             {/* Field: Sound pairing */}
-            <div className="space-y-2 pt-1">
+            <div className="space-y-2.5 pt-1">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <label className="block text-xs font-bold text-slate-800">
@@ -832,7 +1374,7 @@ export default function NewEffect() {
                     onClick={() => {
                       const next = !soundEnabled;
                       setSoundEnabled(next);
-                      if (next) playSound(soundType);
+                      if (next) playSound(soundType, customSound);
                     }}
                     className={`w-9 h-5 rounded-full p-0.5 transition-colors duration-200 ease-in-out cursor-pointer flex items-center ${
                       soundEnabled ? "bg-[#7c3aed] justify-end" : "bg-slate-300 justify-start"
@@ -846,31 +1388,177 @@ export default function NewEffect() {
                 </div>
               </div>
 
-              {/* Sound Select Box */}
-              <div className="transition-all duration-200">
-                <div className="relative">
-                  <select
-                    value={soundType}
-                    onChange={(e) => {
-                      setSoundType(e.target.value);
-                      if (soundEnabled) playSound(e.target.value);
-                    }}
-                    className="w-full appearance-none px-3.5 py-2.5 bg-white border-2 border-[#2563eb] rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400/30 font-medium pr-8 cursor-pointer shadow-xs"
-                  >
-                    <option value="Soft chime">Soft chime</option>
-                    <option value="Party horn">Party horn</option>
-                    <option value="Pop & cheer">Pop & cheer</option>
-                    <option value="Celebration bell">Celebration bell</option>
-                    <option value="Whistle & confetti">Whistle & confetti</option>
-                  </select>
-                  <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-500">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
+              {/* Sound Select Box & Test Button */}
+              <div className={`transition-all duration-200 space-y-2.5 ${!soundEnabled ? "opacity-60" : ""}`}>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <select
+                      value={customSound ? "Custom sound" : soundType}
+                      disabled={!soundEnabled || Boolean(customSound)}
+                      onChange={(e) => {
+                        const nextType = e.target.value;
+                        setSoundType(nextType);
+                        if (soundEnabled) playSound(nextType, customSound);
+                      }}
+                      className={`w-full appearance-none px-3.5 py-2.5 rounded-xl text-xs font-medium pr-8 shadow-xs transition-all ${
+                        !soundEnabled || customSound
+                          ? "bg-slate-100/90 border border-slate-300/80 text-slate-400 cursor-not-allowed select-none"
+                          : "bg-white border-2 border-[#2563eb] text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400/30 cursor-pointer"
+                      }`}
+                      title={
+                        !soundEnabled
+                          ? "Sound pairing is turned off. Toggle switch above to enable sound."
+                          : customSound
+                          ? "Sound dropdown is disabled because a custom sound is uploaded. Remove the custom sound below to re-enable presets."
+                          : ""
+                      }
+                    >
+                      {customSound && (
+                        <option value="Custom sound">✨ Custom uploaded sound (active)</option>
+                      )}
+                      <option value="Fairy magic sparkle">Fairy magic sparkle</option>
+                      <option value="Magic wand sparkle">Magic wand sparkle</option>
+                      <option value="Magic sparkle touch">Magic sparkle touch</option>
+                      <option value="Magic sparkle poof hit">Magic sparkle poof hit</option>
+                      <option value="Fairy sparkle whoosh">Fairy sparkle whoosh</option>
+                      <option value="Sparkling fairy glow">Sparkling fairy glow</option>
+                      <option value="Sparkle hybrid transition">Sparkle hybrid transition</option>
+                      <option value="Magic sparkle whoosh">Magic sparkle whoosh</option>
+                      <option value="Magic notification ring">Magic notification ring</option>
+                      <option value="Fantasy game success notification">Fantasy game success notification</option>
+                    </select>
+                    <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
+                      {!soundEnabled || customSound ? (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" title="Disabled">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                      ) : (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      )}
+                    </div>
                   </div>
+                  {/* Test Sound Button */}
+                  <button
+                    type="button"
+                    disabled={!soundEnabled}
+                    onClick={() => soundEnabled && playSound(soundType, customSound)}
+                    title={!soundEnabled ? "Enable sound pairing to test sounds" : "Click to test this sound"}
+                    className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+                      !soundEnabled
+                        ? "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed select-none"
+                        : "bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 hover:scale-105 active:scale-95 cursor-pointer shadow-2xs"
+                    }`}
+                  >
+                    <span>🔊</span>
+                    <span>Test sound</span>
+                  </button>
                 </div>
-                <p className="text-[11px] text-slate-400 font-medium mt-1">
-                  Only plays reliably on click based triggers
+
+                {/* Upload Custom Sound Box */}
+                <div
+                  className={`border rounded-2xl p-3 flex flex-col gap-2.5 transition-all ${
+                    !soundEnabled
+                      ? "border-slate-200 bg-slate-100/60 pointer-events-none select-none cursor-not-allowed"
+                      : "border-purple-200/90 bg-purple-50/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div
+                        className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                          !soundEnabled
+                            ? "bg-slate-200 text-slate-400"
+                            : "bg-purple-100 text-[#7c3aed]"
+                        }`}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9 18V5l12-2v13" />
+                          <circle cx="6" cy="18" r="3" />
+                          <circle cx="18" cy="16" r="3" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0">
+                        <span className={`block text-xs font-bold truncate ${!soundEnabled ? "text-slate-400" : "text-slate-800"}`}>
+                          {customSound ? (customSoundName || "Custom celebration sound") : "Upload your own sound"}
+                        </span>
+                        <span className="block text-[11px] text-slate-400 font-medium">
+                          {!soundEnabled
+                            ? "Sound pairing is turned off"
+                            : customSound
+                            ? `${customSoundDuration ? `${customSoundDuration}s • ` : ""}Custom audio ready`
+                            : "MP3, WAV, or OGG • Max 250 KB • ≤ 5s"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {customSound && (
+                        <button
+                          type="button"
+                          disabled={!soundEnabled}
+                          onClick={() => soundEnabled && playSound("Custom sound", customSound)}
+                          title="Preview custom sound"
+                          className="px-2.5 py-1.5 bg-purple-100 hover:bg-purple-200/80 text-purple-800 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                          <span>🔊</span>
+                          <span>Preview</span>
+                        </button>
+                      )}
+                      <label
+                        className={`text-xs font-semibold px-2.5 py-1.5 rounded-xl transition-colors shrink-0 ${
+                          !soundEnabled
+                            ? "border border-slate-300 text-slate-400 bg-slate-200/50 cursor-not-allowed pointer-events-none"
+                            : "border border-[#7c3aed] text-[#7c3aed] hover:bg-purple-100/60 cursor-pointer"
+                        }`}
+                      >
+                        <span>{customSound ? "Replace" : "Upload sound"}</span>
+                        <input
+                          type="file"
+                          accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
+                          disabled={!soundEnabled}
+                          onChange={handleSoundUpload}
+                          className="hidden"
+                        />
+                      </label>
+                      {customSound && (
+                        <button
+                          type="button"
+                          disabled={!soundEnabled}
+                          onClick={handleRemoveCustomSound}
+                          title="Remove custom sound"
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Sound Validation Error Alert */}
+                  {soundError && soundEnabled && (
+                    <div className="bg-red-50 border border-red-200/90 rounded-xl px-2.5 py-2 flex items-start gap-2 text-red-700 text-[11px] font-medium leading-tight">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="shrink-0 mt-0.5">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      <span>{soundError}</span>
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-slate-400 font-medium">
+                  {!soundEnabled
+                    ? "Turn on Sound pairing above to enable sounds."
+                    : customSound
+                    ? "Preset sound dropdown is locked while your custom sound is active. Click '✕' to remove it and re-enable presets."
+                    : "Click 'Test sound' or preview the effect to hear the celebration audio"}
                 </p>
               </div>
             </div>
@@ -879,7 +1567,7 @@ export default function NewEffect() {
           {/* ------------------------------------------------------- */}
           {/* RIGHT COLUMN: LIVE PREVIEW + ACTION BUTTONS (7 cols)    */}
           {/* ------------------------------------------------------- */}
-          <div className="lg:col-span-6 xl:col-span-7 bg-white border border-slate-200/90 rounded-[24px] p-6 sm:p-7 shadow-sm flex flex-col justify-between space-y-6">
+          <div className="lg:col-span-6 xl:col-span-7 lg:sticky lg:top-6 lg:self-start bg-white border border-slate-200/90 rounded-[24px] p-6 sm:p-7 shadow-sm flex flex-col justify-between space-y-6">
             {/* Header: Title + Device Switcher */}
             <div className="flex items-center justify-between gap-4">
               <div>
@@ -1041,7 +1729,7 @@ export default function NewEffect() {
                       duration={duration}
                       intensity={intensity}
                       shape={selectedShape}
-                      colors={customColors}
+                      colors={useBrandColor ? detectedBrandColors : customColors}
                       customImage={customImage}
                       triggerKey={burstCount}
                     />
@@ -1072,7 +1760,8 @@ export default function NewEffect() {
               <button
                 type="button"
                 onClick={triggerBurst}
-                className="bg-[#f3e8ff] hover:bg-[#ebd5ff] active:scale-[0.98] text-[#6d28d9] font-bold text-[13.5px] px-4 py-3 rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-1.5 select-none"
+                disabled={isSubmitting}
+                className="bg-[#f3e8ff] hover:bg-[#ebd5ff] active:scale-[0.98] text-[#6d28d9] font-bold text-[13.5px] px-4 py-3 rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-1.5 select-none disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span>▶ Preview effect</span>
                 <span>✨</span>
@@ -1082,24 +1771,77 @@ export default function NewEffect() {
               <button
                 type="button"
                 onClick={() => handleSave("draft")}
-                disabled={isSaving}
-                className="bg-white hover:bg-slate-50 active:scale-[0.98] border border-slate-300 text-slate-700 font-semibold text-[13.5px] px-4 py-3 rounded-2xl transition-all cursor-pointer flex items-center justify-center select-none"
+                disabled={isSubmitting}
+                className={`font-semibold text-[13.5px] px-4 py-3 rounded-2xl transition-all flex items-center justify-center gap-2 select-none border ${
+                  isDraftLoading
+                    ? "bg-slate-100 border-slate-300 text-slate-700 cursor-wait shadow-inner"
+                    : isSubmitting
+                    ? "bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-50"
+                    : "bg-white hover:bg-slate-50 active:scale-[0.98] border-slate-300 text-slate-700 cursor-pointer shadow-sm hover:shadow"
+                }`}
               >
-                <span>Save as draft</span>
+                {isDraftLoading ? (
+                  <>
+                    <ButtonSpinner className="w-4 h-4 text-slate-600" />
+                    <span>{isEditing ? "Saving changes..." : "Saving draft..."}</span>
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      className="w-4 h-4 text-slate-500"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                      <polyline points="17 21 17 13 7 13 7 21" />
+                      <polyline points="7 3 7 8 15 8" />
+                    </svg>
+                    <span>
+                      {isEditing ? "Save draft changes" : "Save as draft"}
+                    </span>
+                  </>
+                )}
               </button>
 
               {/* Button 3: Publish effect 🚀 */}
               <button
                 type="button"
                 onClick={() => handleSave("published")}
-                disabled={isSaving}
-                className="bg-[#4d319e] hover:bg-[#3f2485] active:scale-[0.98] text-white font-bold text-[13.5px] px-5 py-3 rounded-2xl shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 select-none"
+                disabled={isSubmitting}
+                className={`font-bold text-[13.5px] px-5 py-3 rounded-2xl transition-all flex items-center justify-center gap-2 select-none ${
+                  isPublishLoading
+                    ? "bg-[#3f2485] text-white cursor-wait shadow-lg ring-2 ring-purple-400/50"
+                    : isSubmitting
+                    ? "bg-[#4d319e]/50 text-white/60 cursor-not-allowed opacity-50"
+                    : "bg-[#4d319e] hover:bg-[#3f2485] active:scale-[0.98] text-white cursor-pointer shadow-sm hover:shadow-md"
+                }`}
                 style={{
-                  boxShadow: "0 4px 14px rgba(77, 49, 158, 0.25)",
+                  boxShadow: isPublishLoading
+                    ? "0 4px 18px rgba(77, 49, 158, 0.45)"
+                    : "0 4px 14px rgba(77, 49, 158, 0.25)",
                 }}
               >
-                <span>Publish effect</span>
-                <span>🚀</span>
+                {isPublishLoading ? (
+                  <>
+                    <ButtonSpinner className="w-4 h-4 text-white" />
+                    <span>
+                      {isEditing ? "Updating & publishing..." : "Publishing effect..."}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span>
+                      {isEditing
+                        ? "Update & publish effect"
+                        : "Publish effect"}
+                    </span>
+                    <span className="text-base leading-none">🚀</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1223,73 +1965,95 @@ function ConfettiParticle({ shape, color, x, y, rot, size, customImage }) {
   );
 }
 
-// Audio synthesizer for sound pairing
-function playSound(type) {
-  if (typeof window === "undefined") return;
-  try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const audioCtx = new AudioContext();
+// ---------------------------------------------------------------------------
+// Sound Engine — pre-decoded AudioBuffer for zero-latency playback
+// ---------------------------------------------------------------------------
+const SOUND_FILES = {
+  "Fairy magic sparkle":             "/soundEffects/mixkit-fairy-magic-sparkle-871.mp3",
+  "Magic wand sparkle":              "/soundEffects/mixkit-magic-wand-sparkle-3062.mp3",
+  "Magic sparkle touch":             "/soundEffects/mixkit-magic-sparkle-touch-3083.mp3",
+  "Magic sparkle poof hit":          "/soundEffects/mixkit-magic-sparkle-poof-hit-3082.mp3",
+  "Fairy sparkle whoosh":            "/soundEffects/mixkit-fairy-sparkle-whoosh-869.mp3",
+  "Sparkling fairy glow":            "/soundEffects/mixkit-sparkling-fairy-glow-870.mp3",
+  "Sparkle hybrid transition":       "/soundEffects/mixkit-sparkle-hybrid-transition-3060.mp3",
+  "Magic sparkle whoosh":            "/soundEffects/mixkit-magic-sparkle-whoosh-2350.mp3",
+  "Magic notification ring":         "/soundEffects/mixkit-magic-notification-ring-2344.mp3",
+  "Fantasy game success notification": "/soundEffects/mixkit-fantasy-game-success-notification-270.mp3",
+};
 
-    if (type === "Soft chime" || type === "Celebration bell") {
-      const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
-      notes.forEach((freq, idx) => {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + idx * 0.09);
-        gain.gain.setValueAtTime(0.12, audioCtx.currentTime + idx * 0.09);
-        gain.gain.exponentialRampToValueAtTime(
-          0.001,
-          audioCtx.currentTime + idx * 0.09 + 0.5
-        );
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start(audioCtx.currentTime + idx * 0.09);
-        osc.stop(audioCtx.currentTime + idx * 0.09 + 0.5);
-      });
-    } else if (type === "Pop & cheer") {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(240, audioCtx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.18);
-      gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.18);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.18);
-    } else if (type === "Party horn") {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(293.66, audioCtx.currentTime); // D4
-      osc.frequency.linearRampToValueAtTime(392.0, audioCtx.currentTime + 0.3); // G4
-      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.5);
-    } else {
-      // Whistle & confetti
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(600, audioCtx.currentTime);
-      osc.frequency.linearRampToValueAtTime(1200, audioCtx.currentTime + 0.25);
-      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.45);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.45);
+let _adminAudioCtx = null;
+const _audioBufferCache = {};
+let _preloadStarted = false;
+
+function getAdminAudioContext() {
+  if (typeof window === "undefined") return null;
+  try {
+    if (!_adminAudioCtx) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return null;
+      _adminAudioCtx = new AudioContextClass();
     }
-  } catch (err) {
-    console.error("Audio playback error", err);
+    if (_adminAudioCtx.state === "suspended") {
+      _adminAudioCtx.resume().catch(() => {});
+    }
+    return _adminAudioCtx;
+  } catch (e) {
+    console.warn("[ConfettiFlow] AudioContext init error:", e);
+    return null;
   }
 }
+
+// Pre-fetch + decode ALL sound files into AudioBuffers so playback is instant
+function preloadAllSounds() {
+  if (typeof window === "undefined" || _preloadStarted) return;
+  _preloadStarted = true;
+  const ctx = getAdminAudioContext();
+  if (!ctx) return;
+  Object.entries(SOUND_FILES).forEach(([name, path]) => {
+    fetch(path)
+      .then((r) => r.arrayBuffer())
+      .then((ab) => ctx.decodeAudioData(ab))
+      .then((buffer) => { _audioBufferCache[name] = buffer; })
+      .catch(() => {}); // silent — fallback will handle missing files
+  });
+}
+
+// Audio synthesizer for sound pairing
+function playSound(type, customSoundData = null) {
+  if (typeof window === "undefined") return;
+  preloadAllSounds();
+  try {
+    if ((type === "Custom sound" || !SOUND_FILES[type]) && customSoundData) {
+      const audio = new Audio(customSoundData);
+      audio.volume = 0.85;
+      audio.play().catch((err) => console.warn("[ConfettiFlow] Audio play blocked:", err));
+      return;
+    }
+
+    const ctx = getAdminAudioContext();
+    if (!ctx) return;
+
+    const buffer = _audioBufferCache[type];
+    if (buffer) {
+      // Instant zero-latency playback from pre-decoded buffer
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(ctx.currentTime);
+    } else {
+      // Buffer not ready yet — fall back to HTMLAudioElement (small one-off delay)
+      const path = SOUND_FILES[type];
+      if (!path) return;
+      const audio = new Audio(path);
+      audio.volume = 0.85;
+      audio.play().catch(() => {});
+    }
+  } catch (err) {
+    console.warn("[ConfettiFlow] Audio playback error:", err);
+  }
+}
+
+
 
 // Canvas Physics Confetti Simulator animating all 5 modes
 function ConfettiCanvasPreview({
@@ -1306,7 +2070,13 @@ function ConfettiCanvasPreview({
   const animFrameRef = useRef(null);
   const imgRef = useRef(null);
 
-  // Preload custom image if provided
+  // Store all config in refs so they're always fresh but never cause re-animation
+  const configRef = useRef({ mode, position, duration, intensity, shape, colors, customImage });
+  useEffect(() => {
+    configRef.current = { mode, position, duration, intensity, shape, colors, customImage };
+  }, [mode, position, duration, intensity, shape, colors, customImage]);
+
+  // Preload custom image if provided (non-triggering update)
   useEffect(() => {
     if (customImage) {
       const img = new Image();
@@ -1319,11 +2089,17 @@ function ConfettiCanvasPreview({
     }
   }, [customImage]);
 
+  // ONLY re-run the animation when triggerKey changes (explicit user action)
   useEffect(() => {
+    if (triggerKey === 0) return; // skip initial render
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    // Read latest config from ref so it's always current
+    const { mode, position, duration, intensity, shape, colors } = configRef.current;
 
     const parent = canvas.parentElement;
     const rect = canvas.getBoundingClientRect();
@@ -1437,52 +2213,94 @@ function ConfettiCanvasPreview({
         }
 
         // 3. FOUNTAIN MODE: Pieces rise up first, then fall back down, like water from a fountain
-        if (mode === "Fountain" && elapsed < durationMs * 0.8) {
-          const spawnRate = Math.round(3.5 * intensityScale);
-          let fx = width * 0.5;
-          if (position === "Left side") fx = width * 0.28;
-          else if (position === "Right side") fx = width * 0.72;
-          else if (position === "Around button/element") fx = width * 0.5;
+        if (mode === "Fountain" && elapsed < durationMs * 0.88) {
+          let fountainX = width * 0.5;
+          let fountainY = Math.min(height - 18, height * 0.95);
 
+          if (position === "Center") {
+            fountainX = width * 0.5;
+            fountainY = height * 0.58;
+          } else if (position === "Around button/element") {
+            fountainX = width * 0.5;
+            fountainY = height * 0.55;
+          } else if (position === "Top") {
+            fountainX = width * 0.5;
+            fountainY = height * 0.35;
+          } else if (position === "Left side") {
+            fountainX = width * 0.22;
+            fountainY = Math.min(height - 18, height * 0.95);
+          } else if (position === "Right side") {
+            fountainX = width * 0.78;
+            fountainY = Math.min(height - 18, height * 0.95);
+          }
+
+          const reservoirWidth = Math.min(60, width * 0.1);
+          const targetApexY = Math.max(height * 0.12, Math.min(height * 0.22, fountainY * 0.25));
+          const targetRise = Math.max(100, fountainY - targetApexY);
+          const baseSpeed = Math.sqrt(targetRise * 1.05);
+
+          const spawnRate = Math.round(3.2 * intensityScale);
           for (let i = 0; i < spawnRate; i++) {
-            const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.58;
-            const speed = (Math.random() * 6 + 12.5) * (0.85 + intensityScale * 0.15);
+            const isSplash = i === 0 && Math.random() < 0.45;
+
+            let angle;
+            if (isSplash) {
+              angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.2;
+            } else if (position === "Left side") {
+              angle = -Math.PI / 2 + (Math.random() - 0.35) * 0.55;
+            } else if (position === "Right side") {
+              angle = -Math.PI / 2 + (Math.random() - 0.65) * 0.55;
+            } else {
+              angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.55;
+            }
+
+            let speed;
+            if (isSplash) {
+              speed = (Math.random() * 4 + 4) * (0.85 + intensityScale * 0.15);
+            } else {
+              const speedMult = 0.76 + Math.random() * 0.36;
+              speed = baseSpeed * speedMult * (0.85 + intensityScale * 0.15);
+            }
+
             particles.push({
-              x: fx + (Math.random() - 0.5) * 30,
-              y: position === "Around button/element" ? height * 0.50 : height * 0.98,
+              x: fountainX + (Math.random() - 0.5) * reservoirWidth,
+              y: fountainY + (Math.random() - 0.5) * 6,
               vx: Math.cos(angle) * speed,
               vy: Math.sin(angle) * speed,
               color: colors[Math.floor(Math.random() * colors.length)],
-              size: Math.random() * 6 + 7,
+              size: isSplash ? Math.random() * 4 + 4 : Math.random() * 6 + 6,
               rotation: Math.random() * Math.PI * 2,
               rotSpeed: (Math.random() - 0.5) * 0.32,
               scaleX: 1,
               scaleY: 1,
               scaleSpeed: Math.random() * 0.08 + 0.04,
-              gravity: 0.34,
-              drag: 0.984,
+              gravity: isSplash ? 0.35 : 0.28,
+              drag: isSplash ? 0.97 : 0.988,
               opacity: 1,
               life: 0,
-              maxLife: 2600,
+              maxLife: 3200,
             });
           }
         }
 
         // 4. CANNON MODE: Fires from one side or corner across the screen
-        if (mode === "Cannon" && elapsed < durationMs * 0.75) {
+        if (mode === "Cannon" && elapsed < durationMs * 0.8) {
           const cannonVolleyInterval = 480;
           const currentVolley = Math.floor(elapsed / cannonVolleyInterval);
           if (currentVolley > lastCannonVolley) {
             lastCannonVolley = currentVolley;
-            const volleyCount = Math.round(22 * intensityScale);
+            const volleyCount = Math.round(26 * intensityScale);
+            const targetDist = Math.max(width * 0.65, height * 0.75);
+            const baseSpeed = Math.sqrt(targetDist * 0.95);
 
             // Left Cannon (blasts towards upper-right)
             if (position !== "Right side") {
-              const originX = position === "Around button/element" ? width * 0.45 : 0;
-              const originY = position === "Around button/element" ? height * 0.45 : height * 0.94;
+              const originX = position === "Around button/element" ? width * 0.42 : 0;
+              const originY = position === "Around button/element" ? height * 0.52 : Math.min(height - 10, height * 0.94);
               for (let i = 0; i < volleyCount; i++) {
-                const angle = -Math.PI / 4 + (Math.random() - 0.5) * 0.42;
-                const speed = (Math.random() * 6.5 + 12.5) * (0.85 + intensityScale * 0.15);
+                const angle = -Math.PI * 0.28 + (Math.random() - 0.5) * 0.38;
+                const speedMult = 0.82 + Math.random() * 0.36;
+                const speed = baseSpeed * speedMult * (0.85 + intensityScale * 0.15);
                 particles.push({
                   x: originX,
                   y: originY,
@@ -1491,26 +2309,27 @@ function ConfettiCanvasPreview({
                   color: colors[Math.floor(Math.random() * colors.length)],
                   size: Math.random() * 6 + 7,
                   rotation: Math.random() * Math.PI * 2,
-                  rotSpeed: (Math.random() - 0.5) * 0.32,
+                  rotSpeed: (Math.random() - 0.5) * 0.35,
                   scaleX: 1,
                   scaleY: 1,
                   scaleSpeed: 0.08,
-                  gravity: 0.28,
-                  drag: 0.978,
+                  gravity: 0.25,
+                  drag: 0.982,
                   opacity: 1,
                   life: 0,
-                  maxLife: 2600,
+                  maxLife: 2800,
                 });
               }
             }
 
             // Right Cannon (blasts towards upper-left)
             if (position !== "Left side") {
-              const originX = position === "Around button/element" ? width * 0.55 : width;
-              const originY = position === "Around button/element" ? height * 0.45 : height * 0.94;
+              const originX = position === "Around button/element" ? width * 0.58 : width;
+              const originY = position === "Around button/element" ? height * 0.52 : Math.min(height - 10, height * 0.94);
               for (let i = 0; i < volleyCount; i++) {
-                const angle = (-3 * Math.PI) / 4 + (Math.random() - 0.5) * 0.42;
-                const speed = (Math.random() * 6.5 + 12.5) * (0.85 + intensityScale * 0.15);
+                const angle = -Math.PI * 0.72 + (Math.random() - 0.5) * 0.38;
+                const speedMult = 0.82 + Math.random() * 0.36;
+                const speed = baseSpeed * speedMult * (0.85 + intensityScale * 0.15);
                 particles.push({
                   x: originX,
                   y: originY,
@@ -1519,15 +2338,15 @@ function ConfettiCanvasPreview({
                   color: colors[Math.floor(Math.random() * colors.length)],
                   size: Math.random() * 6 + 7,
                   rotation: Math.random() * Math.PI * 2,
-                  rotSpeed: (Math.random() - 0.5) * 0.32,
+                  rotSpeed: (Math.random() - 0.5) * 0.35,
                   scaleX: 1,
                   scaleY: 1,
                   scaleSpeed: 0.08,
-                  gravity: 0.28,
-                  drag: 0.978,
+                  gravity: 0.25,
+                  drag: 0.982,
                   opacity: 1,
                   life: 0,
-                  maxLife: 2600,
+                  maxLife: 2800,
                 });
               }
             }
@@ -1646,7 +2465,7 @@ function ConfettiCanvasPreview({
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [triggerKey, mode, position, duration, intensity, shape, colors, customImage]);
+  }, [triggerKey]);
 
   return (
     <canvas

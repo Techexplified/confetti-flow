@@ -1,8 +1,0 @@
-name = "Confetti Launcher"
-uid = "5373d157-cffb-3af7-c82b-581dc92a679e7723d03b"
-type = "theme_app_extension"
-api_version = "2024-10"
-
-[[targets]]
-target = "body"
-module = "./blocks/confetti-block.liquid"

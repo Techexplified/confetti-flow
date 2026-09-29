@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { redirect, Form, useLoaderData, Link, useSearchParams } from "react-router";
+import { useState, useEffect } from "react";
+import { redirect, Form, useLoaderData, Link, useSearchParams, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -26,9 +26,147 @@ export const loader = async ({ request }) => {
     throw redirect(`/app/onboarding${searchParams ? `?${searchParams}` : ""}`);
   }
 
+  let effects = await prisma.confettiEffect.findMany({
+    where: { shop: session.shop },
+    orderBy: { createdAt: "desc" },
+  });
+
+  // Resilient fallback if in-memory Prisma client DMMF has not refreshed preMade column
+  if (effects.length > 0 && effects[0].preMade === undefined) {
+    try {
+      const rawRows = await prisma.$queryRawUnsafe(
+        'SELECT id, "preMade" FROM "ConfettiEffect" WHERE shop = $1',
+        session.shop
+      );
+      const preMadeMap = new Map((rawRows || []).map((r) => [r.id, Boolean(r.preMade)]));
+      effects = effects.map((eff) => ({
+        ...eff,
+        preMade: preMadeMap.get(eff.id) ?? false,
+      }));
+    } catch (e) {
+      console.error("Error querying preMade column:", e);
+    }
+  }
+
+  // Sync the current tunnel/production URL into a shop metafield so the
+  // storefront Liquid block can read it and use it as the direct API endpoint.
+  // This bypasses the App Proxy which in dev still points to Vercel.
+  try {
+    const { admin } = await authenticate.admin(request);
+
+    // Prefer x-forwarded-host/proto (set by Shopify CLI) over raw request.url
+    // because request.url is the internal http://localhost:XXXX URL.
+    const fwdProto = request.headers.get("x-forwarded-proto") || "https";
+    const fwdHost  = request.headers.get("x-forwarded-host")  || new URL(request.url).host;
+    let appUrl = `${fwdProto}://${fwdHost}`;
+    // Force HTTPS for any cloudflare tunnel URL
+    if (appUrl.startsWith("http://") && !appUrl.includes("localhost")) {
+      appUrl = appUrl.replace("http://", "https://");
+    }
+
+    const shopQuery = await admin.graphql(`
+      query GetShopId {
+        shop {
+          id
+        }
+      }
+    `);
+    const shopJson = await shopQuery.json();
+    const shopGid = shopJson?.data?.shop?.id;
+
+    if (shopGid) {
+      await admin.graphql(
+        `mutation SetAppUrl($mf: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $mf) {
+            metafields { id value }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            mf: [
+              {
+                namespace: "confetti_flow",
+                key: "app_url",
+                value: appUrl,
+                type: "single_line_text_field",
+                ownerId: shopGid,
+              },
+            ],
+          },
+        }
+      );
+      console.log("[ConfettiFlow] Synced app_url metafield:", appUrl);
+    }
+  } catch (e) {
+    // Non-fatal – storefront falls back to App Proxy
+    console.warn("[ConfettiFlow] Could not sync app_url metafield:", e.message);
+  }
+
+  // Check if App Embed is enabled in the active theme
+  let isAppEmbedEnabled = true;
+  try {
+    const { admin } = await authenticate.admin(request);
+    const themeRes = await admin.graphql(`
+      query CheckAppEmbed {
+        themes(first: 5, roles: [MAIN]) {
+          nodes {
+            id
+            name
+            role
+            files(first: 5, filenames: ["config/settings_data.json"]) {
+              nodes {
+                filename
+                body {
+                  ... on OnlineStoreThemeFileBodyText {
+                    content
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `);
+    const themeJson = await themeRes.json();
+    const mainTheme = themeJson?.data?.themes?.nodes?.[0];
+    if (mainTheme) {
+      const content = mainTheme.files?.nodes?.[0]?.body?.content;
+      if (content) {
+        const cleaned = content.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+        const parsed = JSON.parse(cleaned);
+        const blocks = parsed?.current?.blocks || {};
+
+        let found = false;
+        let enabled = false;
+
+        for (const [id, block] of Object.entries(blocks)) {
+          if (
+            block &&
+            typeof block.type === "string" &&
+            (block.type.includes("confetti-embed") || block.type.includes("confettiflow"))
+          ) {
+            found = true;
+            if (!block.disabled) {
+              enabled = true;
+            }
+            break;
+          }
+        }
+
+        // isAppEmbedEnabled is true only if the block exists and is not disabled
+        isAppEmbedEnabled = found && enabled;
+      }
+    }
+  } catch (e) {
+    console.warn("[ConfettiFlow] Could not check app embed status:", e.message);
+  }
+
   return {
     shop: session.shop,
     isOnboarded: shopRecord.isOnboarded,
+    effects,
+    isAppEmbedEnabled,
   };
 };
 
@@ -46,6 +184,26 @@ export const action = async ({ request }) => {
     const url = new URL(request.url);
     const searchParams = url.searchParams.toString();
     return redirect(`/app/onboarding${searchParams ? `?${searchParams}` : ""}`);
+  }
+
+  if (intent === "toggle_status") {
+    const id = (formData.get("id") || "").toString();
+    const currentStatus = (formData.get("currentStatus") || "").toString();
+    const newStatus = currentStatus === "active" ? "draft" : "active";
+
+    await prisma.confettiEffect.updateMany({
+      where: { id, shop: session.shop },
+      data: { status: newStatus },
+    });
+    return { ok: true };
+  }
+
+  if (intent === "delete_effect") {
+    const id = (formData.get("id") || "").toString();
+    await prisma.confettiEffect.deleteMany({
+      where: { id, shop: session.shop },
+    });
+    return { ok: true };
   }
 
   return null;
@@ -118,49 +276,96 @@ function StarsPreview() {
   );
 }
 
+// Visual Preview: Dynamic Confetti Dots based on Shape and Colors
+function DynamicPreview({ shape = "circle", colors = [] }) {
+  const palette = colors && colors.length > 0 ? colors : ["#e11d48", "#f472b6", "#fbbf24", "#10b981", "#3b82f6"];
+  return (
+    <div className="flex items-center space-x-1.5 w-36 h-10 justify-center">
+      {palette.slice(0, 5).map((col, idx) => (
+        <span
+          key={idx}
+          className="inline-block transition-transform hover:scale-125 shadow-xs"
+          style={{
+            width: shape === "circle" ? "9px" : "11px",
+            height: shape === "circle" ? "9px" : "11px",
+            backgroundColor: col,
+            borderRadius: shape === "circle" ? "50%" : shape === "triangle" ? "2px" : "3px",
+            transform: `rotate(${idx * 25 - 45}deg)`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function AppIndex() {
-  const { shop } = useLoaderData();
+  const { shop, effects: dbEffects = [], isAppEmbedEnabled = true } = useLoaderData();
+  const fetcher = useFetcher();
   const [searchParams] = useSearchParams();
-  const queryStr = searchParams.toString() ? `?${searchParams.toString()}` : "";
+  const cleanParams = new URLSearchParams(searchParams);
+  cleanParams.delete("id");
+  cleanParams.delete("effectId");
+  const queryStr = cleanParams.toString() ? `?${cleanParams.toString()}` : "";
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeMenuId, setActiveMenuId] = useState(null);
 
-  // Sample default effects from screenshot
-  const [effects, setEffects] = useState([
-    {
-      id: "1",
-      name: "Order Celebration",
-      subtitle: "A burst of colorful confetti",
-      triggerEvent: "Order Placed",
-      preview: <ConfettiPreview />,
-      active: true,
-    },
-    {
-      id: "2",
-      name: "Welcome Visitors",
-      subtitle: "A subtle welcome burst",
-      triggerEvent: "Page Loaded",
-      preview: <HeartsPreview />,
-      active: false,
-    },
-    {
-      id: "3",
-      name: "Signup Success",
-      subtitle: "Stars and sparkles",
-      triggerEvent: "Customer Sign Up",
-      preview: <StarsPreview />,
-      active: true,
-    },
-  ]);
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!activeMenuId) return;
+    const handleClickOutside = (e) => {
+      if (!e.target.closest('[data-dropdown="action-menu"]')) {
+        setActiveMenuId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [activeMenuId]);
+
+  // Sample fallback template effects if user has not created any yet
+  const sampleEffects = [  ];
+
+  const effects = dbEffects.length > 0
+    ? dbEffects.map((eff) => ({
+        id: eff.id,
+        name: eff.name,
+        subtitle: `${eff.mode} mode • ${eff.shape} • ${eff.duration}s`,
+        triggerEvent: eff.triggerEvent,
+        preview: <DynamicPreview shape={eff.shape} colors={eff.colors} />,
+        active: eff.status === "active",
+        isSample: false,
+        preMade: Boolean(eff.preMade),
+      }))
+    : sampleEffects;
 
   // Toggle active status
-  const toggleStatus = (id) => {
-    setEffects((prev) =>
-      prev.map((eff) =>
-        eff.id === id ? { ...eff, active: !eff.active } : eff
-      )
+  const toggleStatus = (eff) => {
+    if (eff.isSample) {
+      alert("This is a template preview. Click '+ New effect' to create your own live effect!");
+      return;
+    }
+    fetcher.submit(
+      {
+        intent: "toggle_status",
+        id: eff.id,
+        currentStatus: eff.active ? "active" : "draft",
+      },
+      { method: "post" }
     );
+  };
+
+  const deleteEffect = (id) => {
+    if (window.confirm("Are you sure you want to delete this confetti effect?")) {
+      setActiveMenuId(null);
+      fetcher.submit(
+        {
+          intent: "delete_effect",
+          id,
+        },
+        { method: "post" }
+      );
+    }
   };
 
   // Filtered effects
@@ -169,6 +374,28 @@ export default function AppIndex() {
       eff.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       eff.triggerEvent.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Pagination state (Max 10 per page)
+  const PAGE_SIZE = 10;
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset to page 1 whenever search query changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
+
+  const totalEffects = filteredEffects.length;
+  const totalPages = Math.max(1, Math.ceil(totalEffects / PAGE_SIZE));
+  const startIndex = (currentPage - 1) * PAGE_SIZE;
+  const endIndex = Math.min(startIndex + PAGE_SIZE, totalEffects);
+  const paginatedEffects = filteredEffects.slice(startIndex, endIndex);
+
+  // Keep currentPage bounded if items are deleted or filtered
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   return (
     <div
@@ -192,10 +419,11 @@ export default function AppIndex() {
             </p>
           </div>
 
-          {/* Analytics Button */}
-          <button
-            type="button"
+          {/* Analytics Button → navigates to /app/analytics */}
+          <Link
+            to={`/app/analytics${queryStr}`}
             className="bg-white hover:bg-slate-50 border border-slate-200/90 rounded-2xl px-4 py-2 flex items-center gap-2 text-slate-700 font-semibold text-sm shadow-sm transition-all duration-200 cursor-pointer"
+            style={{ textDecoration: "none" }}
           >
             <svg
               width="16"
@@ -213,21 +441,69 @@ export default function AppIndex() {
             </svg>
             <span>Analytics</span>
             <span className="text-slate-400 font-bold text-xs ml-0.5">›</span>
-          </button>
+          </Link>
         </div>
 
         {/* ========================================================= */}
-        {/* 2. HERO BANNER ("CREATE MAGIC") - ACCURATE REPLICA        */}
+        {/* STOREFRONT APP EMBED WARNING (ONLY SHOWN WHEN OFF)        */}
+        {/* ========================================================= */}
+        {!isAppEmbedEnabled && (
+          <div className="bg-amber-50/95 border border-amber-300/80 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs transition-all animate-in fade-in">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-300/70 flex items-center justify-center text-amber-700 shrink-0 text-xl shadow-2xs">
+                ⚠️
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    App Embed is turned OFF in your active theme
+                  </h3>
+                  <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300/70">
+                    Action Required
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
+                  Confetti celebrations won't trigger on your storefront until the{" "}
+                  <strong>ConfettiFlow Celebrations</strong> App Embed is enabled in your Shopify Theme Editor.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 shrink-0 self-start md:self-center">
+              <a
+                href={`https://${shop}/admin/themes/current/editor?context=apps`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-[#4d319e] hover:bg-[#3f2485] active:scale-[0.98] text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer select-none"
+              >
+                <span>Enable in Theme Editor</span>
+                <span className="text-xs font-bold">↗</span>
+              </a>
+              {/* <button
+                type="button"
+                onClick={() => window.location.reload()}
+                title="Refresh and re-check theme status"
+                className="bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold text-xs px-3.5 py-2.5 rounded-xl shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer select-none"
+              >
+                <span>↻</span>
+                <span>Re-check</span>
+              </button> */}
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* 2. HERO BANNER ("CREATE MAGIC")                           */}
         {/* ========================================================= */}
         <div
-          className="relative border border-[#e9e3f8] rounded-[24px] p-6 sm:p-7 md:p-8 shadow-sm overflow-hidden"
+          className="relative border border-[#ece4fc] rounded-[24px] p-6 sm:p-7 md:p-8 shadow-sm overflow-hidden"
           style={{
             background:
-              "radial-gradient(circle at 92% 45%, rgba(216, 180, 254, 0.3) 0%, rgba(243, 232, 255, 0.1) 50%, transparent 75%), linear-gradient(105deg, #ffffff 0%, #faf8fe 35%, #f5effe 72%, #edf2fe 100%)",
+              "linear-gradient(90deg, #fff0feff 0%, #F9F9FF 50%, #EDF5FE 100%)",
             boxShadow:
               "0 4px 20px -2px rgba(109, 40, 217, 0.05), 0 1px 3px rgba(0, 0, 0, 0.02)",
           }}
-        >
+           >
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
             {/* Left Content Column */}
             <div className="shrink-0 max-w-[420px]">
@@ -259,21 +535,21 @@ export default function AppIndex() {
               <SparkleStar color="#fbbf24" size={17} className="absolute bottom-0 left-1" />
             </div>
 
-            {/* Right Section: Action Buttons + Floating Stars + Party Popper */}
+            {/* Right Section: Action Buttons + Floating Stars */}
             <div className="flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-3.5 shrink-0 relative">
               {/* + New effect Button */}
               <Link
                 to={`/app/newEffect${queryStr}`}
-                className="bg-[#4d319e] hover:bg-[#412788] active:scale-[0.98] text-white font-medium text-[13.5px] px-5 py-2.5 rounded-[13px] shadow-sm transition-all duration-150 cursor-pointer flex items-center gap-2 shrink-0 select-none"
+                className="bg-[#382793] hover:bg-[#2f1f80] active:scale-[0.98] text-white font-medium text-[13.5px] px-5 py-2.5 rounded-[14px] shadow-sm transition-all duration-150 cursor-pointer flex items-center gap-2 shrink-0 select-none"
                 style={{
-                  boxShadow: "0 4px 14px rgba(77, 49, 158, 0.22)",
+                  boxShadow: "0 4px 14px rgba(56, 39, 147, 0.25)",
                 }}
               >
                 <span className="text-base font-bold leading-none">+</span>
                 <span>New effect</span>
               </Link>
 
-              {/* Choose from pre-made library Button with Floating Stars */}
+              {/* Choose from pre-made library Button with Floating Stars (No Icon) */}
               <div className="relative shrink-0">
                 {/* Gold star floating above the button */}
                 <SparkleStar
@@ -282,32 +558,20 @@ export default function AppIndex() {
                   className="absolute -top-4 -right-1 pointer-events-none select-none"
                 />
 
-                {/* Purple star floating below the button near the popper cone */}
+                {/* Purple star floating below the button */}
                 <SparkleStar
                   color="#a855f7"
                   size={16}
                   className="absolute -bottom-4 right-1 pointer-events-none select-none"
                 />
 
-                <button
-                  type="button"
-                  className="bg-white hover:bg-[#faf8fe] active:scale-[0.98] border-[1.5px] border-[#d8ccfd] hover:border-[#c5b2fa] text-[#4d319e] font-medium text-[13.5px] px-4 sm:px-5 py-2.5 rounded-[13px] transition-all duration-150 cursor-pointer flex items-center gap-2.5 select-none"
+                <Link
+                  to={`/app/premade${queryStr}`}
+                  className="bg-white hover:bg-[#faf8fe] active:scale-[0.98] border-[1.5px] border-[#cbb8fc] hover:border-[#b89efc] text-[#382793] font-medium text-[13.5px] px-4 sm:px-5 py-2.5 rounded-[14px] transition-all duration-150 cursor-pointer flex items-center justify-center select-none"
+                  style={{ textDecoration: "none" }}
                 >
-                  {/* 4-Square Grid Icon */}
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 16 16"
-                    fill="#4d319e"
-                    className="shrink-0"
-                  >
-                    <rect x="1" y="1" width="5.5" height="5.5" rx="1.5" />
-                    <rect x="9.5" y="1" width="5.5" height="5.5" rx="1.5" />
-                    <rect x="1" y="9.5" width="5.5" height="5.5" rx="1.5" />
-                    <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1.5" />
-                  </svg>
                   <span>Choose from pre-made library</span>
-                </button>
+                </Link>
               </div>
             </div>
           </div>
@@ -357,7 +621,7 @@ export default function AppIndex() {
           </div>
 
           {/* Effects Table */}
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto sm:overflow-visible min-h-[140px]">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-100 text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -371,16 +635,25 @@ export default function AppIndex() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredEffects.length > 0 ? (
-                  filteredEffects.map((eff) => (
+                {paginatedEffects.length > 0 ? (
+                  paginatedEffects.map((eff, index) => (
                     <tr
                       key={eff.id}
-                      className="hover:bg-slate-50/60 transition-colors group"
+                      className={`hover:bg-slate-50/60 transition-colors group ${
+                        activeMenuId === eff.id ? "relative z-30" : ""
+                      }`}
                     >
                       {/* Name Column */}
                       <td className="py-4 sm:py-5 pr-4">
-                        <div className="font-bold text-slate-900 text-sm sm:text-[15px]">
-                          {eff.name}
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 text-sm sm:text-[15px]">
+                            {eff.name}
+                          </span>
+                          {eff.preMade && (
+                            <span className="text-[10px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full border border-purple-200 shrink-0">
+                              Premade
+                            </span>
+                          )}
                         </div>
                         <div className="text-xs text-slate-500 mt-0.5">
                           {eff.subtitle}
@@ -405,7 +678,7 @@ export default function AppIndex() {
                           {/* Toggle Switch */}
                           <button
                             type="button"
-                            onClick={() => toggleStatus(eff.id)}
+                            onClick={() => toggleStatus(eff)}
                             className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 ease-in-out cursor-pointer shadow-inner flex items-center ${
                               eff.active
                                 ? "bg-[#10b981] justify-end"
@@ -429,13 +702,103 @@ export default function AppIndex() {
                       </td>
 
                       {/* Actions Column */}
-                      <td className="py-4 sm:py-5 text-right">
-                        <button
-                          type="button"
-                          className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors font-bold text-lg leading-none cursor-pointer tracking-widest inline-block"
-                        >
-                          •••
-                        </button>
+                      <td
+                        className={`py-4 sm:py-5 text-right ${
+                          activeMenuId === eff.id ? "relative z-40" : ""
+                        }`}
+                      >
+                        <div className="flex items-center justify-end gap-2">
+                          {/* More actions dropdown (•••) */}
+                          <div
+                            className={`relative inline-block text-left ${
+                              activeMenuId === eff.id ? "z-50" : ""
+                            }`}
+                            data-dropdown="action-menu"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setActiveMenuId(activeMenuId === eff.id ? null : eff.id)}
+                              className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors font-bold text-lg leading-none cursor-pointer tracking-widest inline-block"
+                              title="More actions"
+                            >
+                              •••
+                            </button>
+
+                            {activeMenuId === eff.id && (
+                              <div
+                                className={`absolute right-0 w-36 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs font-semibold ${
+                                  index === filteredEffects.length - 1 && filteredEffects.length > 1
+                                    ? "bottom-full mb-1"
+                                    : "top-full mt-1"
+                                }`}
+                              >
+                                {eff.preMade ? (
+                                  <div
+                                    // className="w-full text-left px-3.5 py-2 text-slate-400 flex items-center gap-2 cursor-not-allowed select-none bg-slate-50/70"
+                                    // title="Premade templates cannot be edited"
+                                  >
+                                      {/* <svg
+                                      width="13"
+                                      height="13"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2.2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      className="text-slate-400 shrink-0"
+                                      >
+                                      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+                                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                    </svg>
+                                    <span className="italic text-[11px] text-slate-400">Premade (Locked)</span> */}
+                                  </div>
+                                ) : (
+                                  <Link
+                                    to={
+                                      eff.isSample
+                                        ? `/app/newEffect${queryStr}`
+                                        : `/app/newEffect?id=${eff.id}${queryStr ? `&${queryStr.slice(1)}` : ""}`
+                                    }
+                                    className="w-full text-left px-3.5 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#4d319e] flex items-center gap-2 cursor-pointer transition-colors"
+                                    style={{ textDecoration: "none" }}
+                                    onClick={() => setActiveMenuId(null)}
+                                  >
+                                    <svg
+                                      width="13"
+                                      height="13"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2.2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    >
+                                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                                      <path d="m15 5 4 4" />
+                                    </svg>
+                                    <span>Edit</span>
+                                  </Link>
+                                )}
+
+                                {!eff.isSample ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteEffect(eff.id)}
+                                    className="w-full text-left px-3.5 py-2 text-rose-600 hover:bg-rose-50 flex items-center gap-2 cursor-pointer transition-colors"
+                                  >
+                                    <span>🗑</span>
+                                    <span>Delete</span>
+                                  </button>
+                                ) : (
+                                  <div className="px-3.5 py-2 text-slate-400 font-normal border-t border-slate-100">
+                                    Default template
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -454,16 +817,79 @@ export default function AppIndex() {
           </div>
 
           {/* Table Footer Row */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-6 mt-2 border-t border-slate-100 text-xs text-slate-500 font-medium">
-            <span>Showing 1-3 of 3 effects</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-6 mt-2 border-t border-slate-100 text-xs text-slate-500 font-medium">
+            <div className="flex items-center gap-3">
+              <span>
+                {totalEffects === 0
+                  ? "No effects yet"
+                  : searchQuery.trim()
+                  ? `Showing ${startIndex + 1}–${endIndex} of ${totalEffects} effect${totalEffects === 1 ? "" : "s"}`
+                  : totalEffects === 1
+                  ? "Showing 1 of 1 effect"
+                  : `Showing ${startIndex + 1}–${endIndex} of ${totalEffects} effects`}
+              </span>
+
+              {/* Arrow navigation buttons directly on the right side of the showing text */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold border transition-all ${
+                    currentPage <= 1
+                      ? "bg-slate-100 text-slate-300 border-slate-200/60 cursor-not-allowed select-none"
+                      : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer shadow-xs active:scale-95"
+                  }`}
+                  title="Previous page"
+                >
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="15 18 9 12 15 6" />
+                  </svg>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold border transition-all ${
+                    currentPage >= totalPages
+                      ? "bg-slate-100 text-slate-300 border-slate-200/60 cursor-not-allowed select-none"
+                      : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer shadow-xs active:scale-95"
+                  }`}
+                  title="Next page"
+                >
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+              </div>
+            </div>
             <span>
               Any issues?{" "}
-              <a
-                href="mailto:support@confettiflow.com"
+              <Link
+                to={`/app/contact${queryStr}`}
                 className="text-[#6366f1] hover:underline font-semibold"
               >
                 Contact us.
-              </a>
+              </Link>
             </span>
           </div>
         </div>

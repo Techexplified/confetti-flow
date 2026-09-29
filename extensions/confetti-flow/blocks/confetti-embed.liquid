@@ -1,0 +1,79 @@
+{% comment %}
+  ConfettiFlow - Storefront Celebrations & Confetti Effects
+  Automatically loads and triggers active celebrations configured in the ConfettiFlow app.
+{% endcomment %}
+
+<div id="confetti-flow-canvas-container" style="position: fixed; inset: 0; pointer-events: none; z-index: 9999999; overflow: hidden;" aria-hidden="true"></div>
+
+{% liquid
+  assign brand_colors_str = ""
+  if settings.colors_accent_1
+    assign brand_colors_str = brand_colors_str | append: settings.colors_accent_1 | append: ","
+  endif
+  if settings.colors_solid_button_labels
+    assign brand_colors_str = brand_colors_str | append: settings.colors_solid_button_labels | append: ","
+  endif
+  if settings.colors_accent_2
+    assign brand_colors_str = brand_colors_str | append: settings.colors_accent_2 | append: ","
+  endif
+  if settings.primary_color
+    assign brand_colors_str = brand_colors_str | append: settings.primary_color | append: ","
+  endif
+  if settings.brand_color
+    assign brand_colors_str = brand_colors_str | append: settings.brand_color | append: ","
+  endif
+  if settings.color_primary
+    assign brand_colors_str = brand_colors_str | append: settings.color_primary | append: ","
+  endif
+  if settings.color_schemes
+    for scheme in settings.color_schemes
+      assign s = scheme[1].settings
+      if s.primary_button_background
+        assign brand_colors_str = brand_colors_str | append: s.primary_button_background | append: ","
+      endif
+      if s.secondary_button_background
+        assign brand_colors_str = brand_colors_str | append: s.secondary_button_background | append: ","
+      endif
+    endfor
+  endif
+  assign raw_theme_colors = brand_colors_str | split: "," | compact | uniq
+%}
+
+<script>
+  window.__CONFETTI_FLOW__ = window.__CONFETTI_FLOW__ || {};
+  window.__CONFETTI_FLOW__.shop = {{ shop.permanent_domain | default: shop.domain | json }};
+  window.__CONFETTI_FLOW__.template = {{ template.name | default: "" | json }};
+  window.__CONFETTI_FLOW__.pageType = {{ request.page_type | default: "" | json }};
+  window.__CONFETTI_FLOW__.cartTotal = {{ cart.total_price | default: 0 }} / 100.0;
+  window.__CONFETTI_FLOW__.cartCount = {{ cart.item_count | default: 0 }};
+  window.__CONFETTI_FLOW__.customerId = {{ customer.id | default: "" | json }};
+  window.__CONFETTI_FLOW__.customerOrdersCount = {{ customer.orders_count | default: 0 }};
+  window.__CONFETTI_FLOW__.themeColors = {{ raw_theme_colors | json }};
+  {%- assign cf_direct_url = shop.metafields.confetti_flow.app_url.value | default: "" | strip -%}
+  {%- if cf_direct_url != blank %}
+  // Direct app URL from metafield (tunnel in dev, production URL otherwise)
+  // This is the primary endpoint — bypasses App Proxy misconfiguration in dev
+  window.__CONFETTI_FLOW__.appUrl = {{ cf_direct_url | json }};
+  window.__CONFETTI_FLOW__.effectsEndpoint = {{ cf_direct_url | append: "/api/storefront/effects" | json }};
+  window.__CONFETTI_FLOW__.soundBaseUrl = {{ cf_direct_url | append: "/api/storefront/sound?file=" | json }};
+  {%- else %}
+  // Fallback: App Proxy path (works in production when metafield is set)
+  window.__CONFETTI_FLOW__.effectsEndpoint = "/apps/confetti/effects";
+  window.__CONFETTI_FLOW__.soundBaseUrl = "/apps/confetti/sound?file=";
+  {%- endif %}
+</script>
+
+<script src="{{ 'confetti-flow.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "ConfettiFlow Celebrations",
+  "target": "body",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "ConfettiFlow automatically plays active celebrations configured in your ConfettiFlow app. No extra setup needed — just activate effects in the app dashboard."
+    }
+  ]
+}
+{% endschema %}

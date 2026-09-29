@@ -1,19 +1,24 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "16aa8b18a1361ff4a3edb9bca8ab9893"
+name = "ConfettiFlow"
 application_url = "https://example.com"
 embedded = true
-name = "ConfettiFlow"
+
+[build]
+automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-10"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products,write_metaobjects,write_metaobject_definitions"
+scopes = "write_products,write_metaobjects,write_metaobject_definitions,read_themes"
 
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
 
-[build]
-automatically_update_urls_on_dev = true
+[app_proxy]
+url = "https://confetti-flow.vercel.app/api/storefront"
+subpath = "confetti"
+prefix = "apps"

@@ -33,3 +33,52 @@ model Shop {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+model ConfettiEffect {
+  id                String   @id @default(cuid())
+  shop              String   // Ties the effect to the merchant's store
+  name              String   // e.g. "Order Celebration"
+  status            String   @default("draft") // "active" | "draft"
+
+  // Trigger event & conditions
+  triggerEvent      String   // "Order created" | "Page viewed" | "Cart updated" | "Customer created" | "Custom event"
+  triggerConditions Json     // Structured JSON for rules (tags, discount codes, min order value, etc.)
+
+  // Confetti appearance
+  shape             String   @default("circle") // "circle" | "star" | "heart" | "triangle" | "text" | "custom"
+  customImage       String?  // Base64 or uploaded image URL
+  useBrandColor     Boolean  @default(true)
+  colors            String[] // Hex color codes: ["#e11d48", "#f472b6", "#fbbf24", ...]
+
+  // Animation & Physics
+  mode              String   @default("Burst") // "Burst" | "Falling" | "Fountain" | "Cannon" | "Fireworks"
+  position          String   @default("Full screen") // "Full screen" | "Center" | "Around button/element" | etc.
+  duration          Int      @default(3) // 1 - 10 seconds
+  intensity         Int      @default(2) // 1: Low, 2: Medium, 3: High, 4: Extreme
+
+  // Audio pairing
+  soundEnabled      Boolean  @default(false)
+  soundType         String   @default("Soft chime")
+  customSound       String?  // Base64 audio data URL (data:audio/mp3;base64,...)
+
+  // Premade flag
+  preMade           Boolean  @default(false)
+
+  // Timestamps
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([shop])
+}
+
+model ConfettiFireEvent {
+  id         String   @id @default(cuid())
+  shop       String
+  effectId   String
+  effectName String
+  completed  Boolean  @default(true)
+  firedAt    DateTime @default(now())
+
+  @@index([shop, firedAt])
+  @@index([effectId, firedAt])
+}
