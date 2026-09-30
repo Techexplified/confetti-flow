@@ -288,8 +288,95 @@ function StarsPreview() {
   );
 }
 
-// Visual Preview: Dynamic Confetti Dots based on Shape and Colors
-function DynamicPreview({ shape = "circle", colors = [] }) {
+function parseEmojisOrTextPreview(str) {
+  if (!str || typeof str !== "string") return ["🎉"];
+  const trimmed = str.trim();
+  if (!trimmed) return ["🎉"];
+  if (trimmed.includes(",") || trimmed.includes(" ")) {
+    const parts = trimmed.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) return parts;
+  }
+  if (/^[A-Za-z0-9!$%&*+?]+$/.test(trimmed)) {
+    return [trimmed];
+  }
+  try {
+    const chars = Array.from(trimmed);
+    if (chars.length > 0) return chars;
+  } catch (e) {
+    return [trimmed];
+  }
+  return [trimmed];
+}
+
+// Visual Preview: Dynamic Confetti Dots / Emojis / Shapes based on Shape, Colors, and Custom Image
+function DynamicPreview({ shape = "circle", colors = [], customImage = null }) {
+  // 1. Text / Emoji Shape (or customImage contains text/emojis)
+  if (
+    shape === "text" ||
+    shape === "emoji" ||
+    (customImage && !customImage.startsWith("data:") && !customImage.startsWith("http"))
+  ) {
+    const raw = customImage || "🎉";
+    const emojiList = parseEmojisOrTextPreview(raw);
+    const isAlphabeticalWord = emojiList.length === 1 && /^[A-Za-z0-9!$%&*+?]+$/.test(emojiList[0]);
+
+    if (isAlphabeticalWord) {
+      return (
+        <div className="flex items-center space-x-1.5 w-36 h-10 justify-center">
+          <span className="px-2.5 py-1 bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg shadow-2xs">
+            {emojiList[0]}
+          </span>
+        </div>
+      );
+    }
+
+    const displayItems =
+      emojiList.length === 1
+        ? [emojiList[0], emojiList[0], emojiList[0]]
+        : emojiList.slice(0, 4);
+
+    return (
+      <div className="flex items-center space-x-1.5 w-36 h-10 justify-center select-none">
+        {displayItems.map((emoji, idx) => (
+          <span
+            key={idx}
+            className="inline-flex items-center justify-center text-lg transition-transform hover:scale-130 cursor-default"
+            style={{
+              transform: `rotate(${idx % 2 === 0 ? -12 + idx * 7 : 12 - idx * 5}deg) translateY(${idx % 2 === 0 ? -2 : 2}px)`,
+            }}
+            title={emoji}
+          >
+            {emoji}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  // 2. Custom Uploaded Image
+  if (shape === "custom" && customImage) {
+    return (
+      <div className="flex items-center space-x-1.5 w-36 h-10 justify-center">
+        <img
+          src={customImage}
+          alt="Custom shape"
+          className="w-7 h-7 object-contain rounded-md shadow-2xs hover:scale-115 transition-transform"
+        />
+      </div>
+    );
+  }
+
+  // 3. Heart Shape
+  if (shape === "heart") {
+    return <HeartsPreview />;
+  }
+
+  // 4. Star Shape
+  if (shape === "star") {
+    return <StarsPreview />;
+  }
+
+  // 5. Default Colored Geometric Dots
   const palette = colors && colors.length > 0 ? colors : ["#e11d48", "#f472b6", "#fbbf24", "#10b981", "#3b82f6"];
   return (
     <div className="flex items-center space-x-1.5 w-36 h-10 justify-center">
@@ -371,12 +458,23 @@ export default function AppIndex() {
           ? optimisticStatusMap[eff.id]
           : eff.status === "active";
 
+        const shapeDisplay =
+          eff.shape === "text" || eff.shape === "emoji"
+            ? `Emoji (${(eff.customImage || "🎉").slice(0, 10)})`
+            : eff.shape;
+
         return {
           id: eff.id,
           name: eff.name,
-          subtitle: `${eff.mode} mode • ${eff.shape} • ${eff.duration}s`,
+          subtitle: `${eff.mode} mode • ${shapeDisplay} • ${eff.duration}s`,
           triggerEvent: eff.triggerEvent,
-          preview: <DynamicPreview shape={eff.shape} colors={eff.colors} />,
+          preview: (
+            <DynamicPreview
+              shape={eff.shape}
+              colors={eff.colors}
+              customImage={eff.customImage}
+            />
+          ),
           active,
           isSample: false,
           preMade: Boolean(eff.preMade),
