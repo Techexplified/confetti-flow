@@ -24,7 +24,10 @@ api_version = "2026-01"
 scopes = "write_products,read_themes"
 
 [auth]
-redirect_urls = [ "https://confetti-maker.vercel.app/auth/callback" ]  # ← Also check this is correct
+redirect_urls = [
+  "https://confetti-flow.vercel.app/auth/callback",
+  "https://confetti-maker.vercel.app/auth/callback"
+]
 
 [app_proxy]
 url = "https://confetti-flow.vercel.app/api/storefront"

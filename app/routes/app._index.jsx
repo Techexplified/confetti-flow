@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { redirect, Form, useLoaderData, Link, useSearchParams, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import ConfettiLoadingScreen from "../components/ConfettiLoadingScreen";
 
 // Server-side in-memory caches to prevent slow GraphQL calls on every action revalidation
 const appUrlCache = new Map(); // shop -> { url: string, time: number }
@@ -318,6 +319,14 @@ export default function AppIndex() {
   cleanParams.delete("effectId");
   const queryStr = cleanParams.toString() ? `?${cleanParams.toString()}` : "";
 
+  // Splash loader for initial page entry
+  const [initialLoading, setInitialLoading] = useState(() => {
+    if (typeof window !== "undefined" && window.__hasClientNavigated) {
+      return false;
+    }
+    return true;
+  });
+
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
   const [activeMenuId, setActiveMenuId] = useState(null);
@@ -442,6 +451,10 @@ export default function AppIndex() {
       setCurrentPage(totalPages);
     }
   }, [currentPage, totalPages]);
+
+  if (initialLoading) {
+    return <ConfettiLoadingScreen onComplete={() => setInitialLoading(false)} />;
+  }
 
   return (
     <div

@@ -168,7 +168,7 @@ export default function ContactPage() {
   const [copied, setCopied] = useState(false);
 
   const queryStr = searchParams.toString() ? `?${searchParams.toString()}` : "";
-  const supportEmail = "support@confettiflow.com";
+  const supportEmail = "Hello@explified.com";
 
   const handleCopy = async () => {
     try {

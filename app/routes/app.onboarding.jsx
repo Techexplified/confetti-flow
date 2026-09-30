@@ -350,12 +350,12 @@ export default function Onboarding() {
             </div>
 
             {/* Skip button for instant preview */}
-            <button
+            {/* <button
               onClick={() => setStep("welcome")}
               className="text-xs text-slate-400 hover:text-slate-600 font-medium transition-colors pt-2 cursor-pointer"
             >
               Skip waiting →
-            </button>
+            </button> */}
           </div>
         </div>
       )}
@@ -610,7 +610,7 @@ export default function Onboarding() {
             </button>
 
             {/* Subtle Navigation controls */}
-            <div className="flex items-center justify-between w-full mt-3 px-1">
+            {/* <div className="flex items-center justify-between w-full mt-3 px-1">
               <button
                 type="button"
                 onClick={() => setStep("welcome")}
@@ -630,7 +630,7 @@ export default function Onboarding() {
               >
                 Skip to Dashboard →
               </button>
-            </div>
+            </div> */}
           </div>
         </div>
       )}
