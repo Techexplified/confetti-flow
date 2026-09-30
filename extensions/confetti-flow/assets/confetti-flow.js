@@ -485,15 +485,80 @@
     const getParticleShape = () =>
       shapeList[Math.floor(Math.random() * shapeList.length)] || "circle";
 
+    const parseEmojisOrText = (str) => {
+      if (!str || typeof str !== "string") return ["🎉"];
+      const trimmed = str.trim();
+      if (!trimmed) return ["🎉"];
+      if (trimmed.includes(",") || trimmed.includes(" ")) {
+        const parts = trimmed.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+        if (parts.length > 0) return parts;
+      }
+      if (/^[A-Za-z0-9!$%&*+?]+$/.test(trimmed)) {
+        return [trimmed];
+      }
+      try {
+        const chars = Array.from(trimmed);
+        if (chars.length > 0) return chars;
+      } catch (e) {
+        return [trimmed];
+      }
+      return [trimmed];
+    };
+
+    const _storefrontEmojiSprites = new Map();
+    const getStorefrontEmojiSprite = (glyph, baseSize = 64) => {
+      if (!glyph || typeof glyph !== "string") return null;
+      const trimmed = glyph.trim();
+      if (!trimmed) return null;
+      const cacheKey = trimmed + "_" + baseSize;
+      if (_storefrontEmojiSprites.has(cacheKey)) {
+        return _storefrontEmojiSprites.get(cacheKey);
+      }
+      try {
+        const c = document.createElement("canvas");
+        const ctx2 = c.getContext("2d");
+        if (!ctx2) return null;
+        const isLong = trimmed.length > 2;
+        const fontSize = isLong ? Math.round(baseSize * 0.42) : Math.round(baseSize * 0.72);
+        const fontStr = "bold " + fontSize + 'px "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif';
+        ctx2.font = fontStr;
+        const textWidth = ctx2.measureText(trimmed).width;
+        const width = Math.max(baseSize, Math.ceil(textWidth + 14));
+        const height = baseSize;
+        c.width = width;
+        c.height = height;
+        ctx2.textAlign = "center";
+        ctx2.textBaseline = "middle";
+        ctx2.font = fontStr;
+        ctx2.fillText(trimmed, width / 2, height / 2);
+        const obj = { canvas: c, width: width, height: height, aspect: width / height };
+        _storefrontEmojiSprites.set(cacheKey, obj);
+        return obj;
+      } catch (e) {
+        return null;
+      }
+    };
+
+    const isTextShape = config.shape === "text" || config.shape === "emoji";
+    const emojiList =
+      isTextShape && config.customImage && !config.customImage.startsWith("data:")
+        ? parseEmojisOrText(config.customImage)
+        : ["🎉"];
+    const emojiSprites = isTextShape ? emojiList.map((e) => getStorefrontEmojiSprite(e)).filter(Boolean) : [];
+
     // Helper: draw customized shape
     const drawShape = (p) => {
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(p.rotation);
-      ctx.scale(p.scaleX, 1);
-      ctx.globalAlpha = Math.max(0, p.alpha);
 
       const activeShape = p.shape || getParticleShape();
+      if (activeShape === "text" || activeShape === "emoji") {
+        ctx.scale(1, 1);
+      } else {
+        ctx.scale(p.scaleX, 1);
+      }
+      ctx.globalAlpha = Math.max(0, p.alpha);
 
       if (activeShape === "custom" && customImg && customImg.complete) {
         ctx.drawImage(customImg, -p.size / 2, -p.size / 2, p.size, p.size);
@@ -576,6 +641,13 @@
         ctx.lineTo(-p.size * 0.86, p.size * 0.5);
         ctx.closePath();
         ctx.fill();
+      } else if (activeShape === "text" || activeShape === "emoji") {
+        const sprite = p.sprite || (emojiSprites.length > 0 ? emojiSprites[Math.abs(Math.round((p.rotation || 0) * 10)) % emojiSprites.length] : null);
+        if (sprite && sprite.canvas) {
+          const drawH = p.size * 2.2;
+          const drawW = drawH * sprite.aspect;
+          ctx.drawImage(sprite.canvas, -drawW / 2, -drawH / 2, drawW, drawH);
+        }
       } else {
         // Circle / oval confetti
         ctx.fillStyle = p.color;
@@ -588,18 +660,19 @@
 
     // 1. BURST MODE
     if (mode === "Burst") {
-      const count = Math.round(90 * intensityScale);
+      const count = isTextShape ? Math.round(42 * intensityScale) : Math.round(90 * intensityScale);
       for (let i = 0; i < count; i++) {
         const angle = Math.random() * Math.PI * 2;
         const speed =
           (Math.random() * 9 + 5) * (0.85 + intensityScale * 0.15);
+        const sprite = isTextShape && emojiSprites.length > 0 ? emojiSprites[i % emojiSprites.length] : null;
         particles.push({
           x: ox,
           y: oy,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed - 2.5,
           color: colors[i % colors.length],
-          size: Math.random() * 5 + 6,
+          size: isTextShape ? Math.random() * 4 + 9 : Math.random() * 5 + 6,
           rotation: Math.random() * Math.PI * 2,
           rotSpeed: (Math.random() - 0.5) * 0.3,
           scaleX: 1,
@@ -607,6 +680,7 @@
           gravity: 0.24,
           friction: 0.97,
           alpha: 1,
+          sprite: sprite,
         });
       }
     }

@@ -170,6 +170,96 @@ function ButtonSpinner({ className = "w-4 h-4 text-current" }) {
   );
 }
 
+// Helper: Parse emojis or short text string into individual elements
+export function parseEmojisOrText(str) {
+  if (!str || typeof str !== "string") return ["🎉"];
+  const trimmed = str.trim();
+  if (!trimmed) return ["🎉"];
+
+  // 1. If comma or space separated: "🎉, 🚀" or "🎉 🚀"
+  if (trimmed.includes(",") || trimmed.includes(" ")) {
+    const parts = trimmed
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length > 0) return parts;
+  }
+
+  // 2. If single short alphanumeric word like "SALE", "VIP", "100%"
+  if (/^[A-Za-z0-9!$%&*+?]+$/.test(trimmed)) {
+    return [trimmed];
+  }
+
+  // 3. If concatenated emojis like "🎉🚀❤️" -> split via Array.from
+  try {
+    const chars = Array.from(trimmed);
+    if (chars.length > 0) return chars;
+  } catch (e) {
+    return [trimmed];
+  }
+
+  return [trimmed];
+}
+
+const EMOJI_CATEGORIES = {
+  Celebration: [
+    { emoji: "🎉", label: "Party Popper" },
+    { emoji: "🥳", label: "Partying Face" },
+    { emoji: "🍾", label: "Champagne" },
+    { emoji: "🥂", label: "Clinking Glasses" },
+    { emoji: "🎈", label: "Balloon" },
+    { emoji: "🎊", label: "Confetti Ball" },
+    { emoji: "🎂", label: "Birthday Cake" },
+    { emoji: "🎁", label: "Wrapped Gift" },
+    { emoji: "🪄", label: "Magic Wand" },
+    { emoji: "✨", label: "Sparkles" },
+  ],
+  Love: [
+    { emoji: "❤️", label: "Red Heart" },
+    { emoji: "💖", label: "Sparkling Heart" },
+    { emoji: "💝", label: "Heart with Ribbon" },
+    { emoji: "💕", label: "Two Hearts" },
+    { emoji: "💘", label: "Heart with Arrow" },
+    { emoji: "💗", label: "Growing Heart" },
+    { emoji: "😍", label: "Heart Eyes" },
+    { emoji: "🥰", label: "Smiling with Hearts" },
+    { emoji: "🌹", label: "Rose" },
+    { emoji: "💐", label: "Bouquet" },
+  ],
+  Deals: [
+    { emoji: "💰", label: "Money Bag" },
+    { emoji: "🛍️", label: "Shopping Bags" },
+    { emoji: "🏷️", label: "Price Tag" },
+    { emoji: "💎", label: "Gem Stone" },
+    { emoji: "⭐", label: "Star" },
+    { emoji: "🌟", label: "Glowing Star" },
+    { emoji: "🔥", label: "Fire / Hot Deal" },
+    { emoji: "⚡", label: "High Voltage" },
+    { emoji: "👑", label: "Crown / VIP" },
+    { emoji: "🛒", label: "Shopping Cart" },
+  ],
+  Faces: [
+    { emoji: "🤩", label: "Star-Struck" },
+    { emoji: "😎", label: "Cool Sunglasses" },
+    { emoji: "👏", label: "Clapping Hands" },
+    { emoji: "🙌", label: "Raising Hands" },
+    { emoji: "💯", label: "Hundred Points" },
+    { emoji: "✌️", label: "Victory Hand" },
+    { emoji: "🤑", label: "Money Mouth" },
+    { emoji: "🚀", label: "Rocket" },
+    { emoji: "🌈", label: "Rainbow" },
+    { emoji: "🦄", label: "Unicorn" },
+  ],
+};
+
+const EMOJI_PRESETS = [
+  { name: "Party Mix", emojis: "🎉 🥳 🎈 ✨" },
+  { name: "Love & Thanks", emojis: "❤️ 💖 💐 ✨" },
+  { name: "VIP & Deals", emojis: "💰 💎 🔥 👑" },
+  { name: "Store Launch", emojis: "🚀 ⭐ ⚡ 🎊" },
+  { name: "Birthday", emojis: "🎂 🎁 🥳 🎈" },
+];
+
 export default function NewEffect() {
   const loaderData = useLoaderData();
   const effect = loaderData?.effect || null;
@@ -213,6 +303,21 @@ export default function NewEffect() {
   // Shape state: 'circle' | 'star' | 'heart' | 'triangle' | 'text' | 'custom'
   const [selectedShape, setSelectedShape] = useState(effect?.shape || "circle");
   const [customImage, setCustomImage] = useState(effect?.customImage || null);
+  const [emojiText, setEmojiText] = useState(
+    effect?.shape === "text" && effect?.customImage && !effect.customImage.startsWith("data:")
+      ? effect.customImage
+      : "🎉"
+  );
+  const [emojiCategory, setEmojiCategory] = useState("Celebration");
+  const emojiDebounceRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (emojiDebounceRef.current) {
+        clearTimeout(emojiDebounceRef.current);
+      }
+    };
+  }, []);
 
   // Colors state
   const [useBrandColor, setUseBrandColor] = useState(
@@ -237,7 +342,10 @@ export default function NewEffect() {
   const [intensity, setIntensity] = useState(Number(effect?.intensity) || 2); // 1: Low, 2: Medium, 3: High, 4: Extreme
 
   // Sound pairing state
-  const [soundEnabled, setSoundEnabled] = useState(Boolean(effect?.soundEnabled));
+  const isSoundDisabledByTrigger = triggerEvent === "Page viewed";
+  const [soundEnabled, setSoundEnabled] = useState(
+    effect?.triggerEvent === "Page viewed" ? false : Boolean(effect?.soundEnabled)
+  );
   const [soundType, setSoundType] = useState(effect?.soundType || "Fairy magic sparkle");
   const [customSound, setCustomSound] = useState(effect?.customSound || null);
   const [customSoundName, setCustomSoundName] = useState(effect?.customSound ? "Custom sound active" : "");
@@ -249,7 +357,8 @@ export default function NewEffect() {
     if (effect) {
       // EDIT mode: populate all fields from the existing effect
       setEffectName(effect.name || "");
-      setTriggerEvent(effect.triggerEvent || "Order created");
+      const loadedTrigger = effect.triggerEvent || "Order created";
+      setTriggerEvent(loadedTrigger);
       const c =
         typeof effect.triggerConditions === "object" && effect.triggerConditions !== null
           ? effect.triggerConditions
@@ -264,6 +373,11 @@ export default function NewEffect() {
       setLoyaltyMilestone(c.loyaltyMilestone || "");
       setSelectedShape(effect.shape || "circle");
       setCustomImage(effect.customImage || null);
+      if (effect.shape === "text" && effect.customImage && !effect.customImage.startsWith("data:")) {
+        setEmojiText(effect.customImage);
+      } else {
+        setEmojiText("🎉");
+      }
       setUseBrandColor(effect.useBrandColor !== undefined ? effect.useBrandColor : true);
       if (Array.isArray(effect.colors) && effect.colors.length > 0) {
         setCustomColors(effect.colors);
@@ -272,7 +386,7 @@ export default function NewEffect() {
       setPosition(effect.position || "Full screen");
       setDuration(Number(effect.duration) || 3);
       setIntensity(Number(effect.intensity) || 2);
-      setSoundEnabled(Boolean(effect.soundEnabled));
+      setSoundEnabled(loadedTrigger === "Page viewed" ? false : Boolean(effect.soundEnabled));
       setSoundType(effect.soundType || "Fairy magic sparkle");
       setCustomSound(effect.customSound || null);
       setCustomSoundName(effect.customSound ? "Custom celebration sound" : "");
@@ -292,6 +406,7 @@ export default function NewEffect() {
       setLoyaltyMilestone("");
       setSelectedShape("circle");
       setCustomImage(null);
+      setEmojiText("🎉");
       setUseBrandColor(true);
       setCustomColors(["#e11d48", "#fbbf24", "#6366f1"]);
       setMode("Burst");
@@ -350,7 +465,7 @@ export default function NewEffect() {
 
   const triggerBurst = () => {
     setBurstCount((prev) => prev + 1);
-    if (soundEnabled) {
+    if (soundEnabled && !isSoundDisabledByTrigger) {
       playSound(soundType, customSound);
     }
   };
@@ -507,14 +622,14 @@ export default function NewEffect() {
         loyaltyMilestone,
       }),
       shape: selectedShape,
-      customImage: customImage || "",
+      customImage: selectedShape === "text" ? (emojiText || "🎉") : (customImage || ""),
       useBrandColor: String(useBrandColor),
       colors: JSON.stringify(useBrandColor ? detectedBrandColors : customColors),
       mode,
       position,
       duration: String(duration),
       intensity: String(intensity),
-      soundEnabled: String(soundEnabled),
+      soundEnabled: String(isSoundDisabledByTrigger ? false : soundEnabled),
       soundType,
       customSound: customSound || "",
     };
@@ -613,7 +728,13 @@ export default function NewEffect() {
               <div className="relative">
                 <select
                   value={triggerEvent}
-                  onChange={(e) => setTriggerEvent(e.target.value)}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    setTriggerEvent(nextVal);
+                    if (nextVal === "Page viewed") {
+                      setSoundEnabled(false);
+                    }
+                  }}
                   className="w-full appearance-none px-3.5 py-2.5 bg-slate-50/70 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-400/30 focus:border-purple-400 transition-all pr-9 cursor-pointer font-medium"
                 >
                   {/* <option value="Order created">Order created</option> */}
@@ -998,23 +1119,218 @@ export default function NewEffect() {
                   </svg>
                 </button>
 
-                {/* Text / Lettering */}
+                {/* Text / Lettering / Emoji */}
                 <button
                   type="button"
                   onClick={() => {
                     setSelectedShape("text");
                     setCustomImage(null);
+                    if (!emojiText) setEmojiText("🎉");
+                    setBurstCount((prev) => prev + 1);
+                    if (soundEnabled && !isSoundDisabledByTrigger) playSound(soundType, customSound);
                   }}
-                  className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+                  className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all cursor-pointer relative ${
                     selectedShape === "text"
                       ? "border-2 border-[#4d319e] bg-purple-50 shadow-sm"
                       : "border border-slate-200 hover:bg-slate-50"
                   }`}
-                  title="Text Aa"
+                  title="Emoji & Text Aa"
                 >
-                  <span className="text-sm font-bold text-slate-600">Aa</span>
+                  <span className="text-sm font-bold text-slate-700">Aa</span>
+                  {selectedShape === "text" && emojiText && (
+                    <span className="absolute -top-1 -right-1 text-xs bg-white border border-purple-200 rounded-full w-4.5 h-4.5 flex items-center justify-center shadow-xs">
+                      {parseEmojisOrText(emojiText)[0] || "🎉"}
+                    </span>
+                  )}
                 </button>
               </div>
+
+              {/* =================================================== */}
+              {/* EMOJI KEYBOARD & CUSTOM PICKER                      */}
+              {/* =================================================== */}
+              {selectedShape === "text" && (
+                <div className="border border-purple-200/90 bg-gradient-to-b from-purple-50/60 to-white rounded-2xl p-4 space-y-3.5 shadow-sm animate-in fade-in zoom-in-95 duration-200">
+                  {/* Header: Title + Active Emojis */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-purple-100 flex items-center justify-center text-lg shrink-0">
+                        <span>😀</span>
+                      </div>
+                      <div>
+                        <span className="block text-xs font-bold text-slate-900">
+                          Emoji Confetti Keyboard
+                        </span>
+                        <span className="block text-[11px] text-slate-500 font-medium">
+                          Click emojis to add them to your celebration shower
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Active Emojis Display */}
+                    <div className="flex items-center gap-1.5 bg-white border border-purple-200/90 rounded-xl px-2.5 py-1 shadow-xs">
+                      <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider">
+                        Active:
+                      </span>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {parseEmojisOrText(emojiText || "🎉").map((item, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-flex items-center gap-1 bg-purple-50 border border-purple-200 text-slate-800 text-xs px-1.5 py-0.5 rounded-md font-semibold"
+                          >
+                            <span>{item}</span>
+                            {parseEmojisOrText(emojiText || "🎉").length > 1 && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const updated = parseEmojisOrText(emojiText).filter((_, i) => i !== idx);
+                                  setEmojiText(updated.join(" ") || "🎉");
+                                  setBurstCount((prev) => prev + 1);
+                                }}
+                                className="text-slate-400 hover:text-rose-500 text-[11px] leading-none font-bold cursor-pointer"
+                                title="Remove"
+                              >
+                                ×
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 1-Click Popular Preset Mixes */}
+                  <div>
+                    <span className="block text-[10.5px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Popular Mixes
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {EMOJI_PRESETS.map((preset) => {
+                        const isSelected = emojiText.trim() === preset.emojis.trim();
+                        return (
+                          <button
+                            key={preset.name}
+                            type="button"
+                            onClick={() => {
+                              setEmojiText(preset.emojis);
+                              setBurstCount((prev) => prev + 1);
+                              if (soundEnabled && !isSoundDisabledByTrigger) playSound(soundType, customSound);
+                            }}
+                            className={`text-xs px-2.5 py-1 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                              isSelected
+                                ? "bg-[#4d319e] text-white shadow-xs"
+                                : "bg-white border border-purple-200 text-slate-700 hover:bg-purple-100/50"
+                            }`}
+                          >
+                            <span>{preset.emojis.split(" ")[0]}</span>
+                            <span>{preset.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Category Tabs */}
+                  <div className="border-b border-purple-200/80 flex items-center gap-1 pt-1 overflow-x-auto no-scrollbar">
+                    {Object.keys(EMOJI_CATEGORIES).map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setEmojiCategory(cat)}
+                        className={`text-xs font-semibold px-3 py-1.5 border-b-2 transition-all cursor-pointer shrink-0 ${
+                          emojiCategory === cat
+                            ? "border-[#4d319e] text-[#4d319e]"
+                            : "border-transparent text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Emoji Keyboard Grid */}
+                  <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 bg-white p-2.5 rounded-xl border border-purple-200/80 shadow-inner">
+                    {(EMOJI_CATEGORIES[emojiCategory] || []).map((item) => {
+                      const activeList = parseEmojisOrText(emojiText);
+                      const isEmojiActive = activeList.includes(item.emoji);
+                      return (
+                        <button
+                          key={item.emoji}
+                          type="button"
+                          onClick={() => {
+                            let nextList;
+                            if (isEmojiActive) {
+                              if (activeList.length > 1) {
+                                nextList = activeList.filter((e) => e !== item.emoji);
+                              } else {
+                                nextList = [item.emoji];
+                              }
+                            } else {
+                              if (activeList.length >= 6) {
+                                nextList = [...activeList.slice(1), item.emoji];
+                              } else {
+                                nextList = [...activeList, item.emoji];
+                              }
+                            }
+                            setEmojiText(nextList.join(" "));
+                            setBurstCount((prev) => prev + 1);
+                            if (soundEnabled && !isSoundDisabledByTrigger) playSound(soundType, customSound);
+                          }}
+                          className={`h-10 text-2xl flex items-center justify-center rounded-xl transition-all cursor-pointer hover:scale-120 active:scale-95 ${
+                            isEmojiActive
+                              ? "bg-purple-100 ring-2 ring-[#7c3aed] shadow-xs"
+                              : "hover:bg-slate-100"
+                          }`}
+                          title={`${item.label} (Click to toggle)`}
+                        >
+                          {item.emoji}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Custom Emoji / Text Input */}
+                  <div className="space-y-1 pt-1">
+                    <label className="block text-[11px] font-bold text-slate-600">
+                      Or type custom emojis / letters:
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        value={emojiText}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setEmojiText(val);
+                          if (emojiDebounceRef.current) {
+                            clearTimeout(emojiDebounceRef.current);
+                          }
+                          emojiDebounceRef.current = setTimeout(() => {
+                            setBurstCount((prev) => prev + 1);
+                            if (soundEnabled && !isSoundDisabledByTrigger) playSound(soundType, customSound);
+                          }, 260);
+                        }}
+                        placeholder="e.g. 🎉 🚀 ❤️ or SALE"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#7c3aed]/40 focus:border-[#7c3aed] pr-16"
+                      />
+                      {emojiText && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEmojiText("🎉");
+                            setBurstCount((prev) => prev + 1);
+                          }}
+                          className="absolute right-2 text-xs text-slate-400 hover:text-slate-600 font-semibold px-2 py-1 rounded hover:bg-slate-100 cursor-pointer"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                    <span className="block text-[10.5px] text-slate-400">
+                      💡 Tip: You can type multiple emojis separated by space (e.g. 🎉 🚀 ✨) to rain down together!
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Upload Custom Image Box */}
               <div className="border border-purple-200/90 bg-purple-50/40 rounded-2xl p-3 flex items-center justify-between gap-3">
@@ -1263,7 +1579,7 @@ export default function NewEffect() {
                         setPosition(validPositions[0]);
                       }
                       setBurstCount((prev) => prev + 1);
-                      if (soundEnabled) playSound(soundType);
+                      if (soundEnabled && !isSoundDisabledByTrigger) playSound(soundType);
                     }}
                     className="w-full appearance-none px-3 py-2 bg-slate-50/70 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-400/30 focus:border-purple-400 transition-all pr-8 cursor-pointer font-medium"
                   >
@@ -1362,51 +1678,78 @@ export default function NewEffect() {
             </div>
 
             {/* Field: Sound pairing */}
-            <div className="space-y-2.5 pt-1">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
+            <div className={`space-y-2.5 pt-1 transition-all ${isSoundDisabledByTrigger ? "opacity-95" : ""}`}>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2.5 flex-wrap">
                   <label className="block text-xs font-bold text-slate-800">
                     Sound pairing
                   </label>
                   {/* Toggle Switch */}
                   <button
                     type="button"
+                    disabled={isSoundDisabledByTrigger}
                     onClick={() => {
+                      if (isSoundDisabledByTrigger) return;
                       const next = !soundEnabled;
                       setSoundEnabled(next);
                       if (next) playSound(soundType, customSound);
                     }}
-                    className={`w-9 h-5 rounded-full p-0.5 transition-colors duration-200 ease-in-out cursor-pointer flex items-center ${
-                      soundEnabled ? "bg-[#7c3aed] justify-end" : "bg-slate-300 justify-start"
+                    className={`w-9 h-5 rounded-full p-0.5 transition-colors duration-200 ease-in-out flex items-center ${
+                      isSoundDisabledByTrigger
+                        ? "bg-slate-200 cursor-not-allowed opacity-60 justify-start"
+                        : soundEnabled
+                        ? "bg-[#7c3aed] justify-end cursor-pointer"
+                        : "bg-slate-300 justify-start cursor-pointer"
                     }`}
+                    title={
+                      isSoundDisabledByTrigger
+                        ? "Sound pairing is disabled when trigger event is 'Page viewed'"
+                        : "Toggle sound pairing"
+                    }
                   >
                     <span className="w-4 h-4 rounded-full bg-white shadow-sm block transition-transform"></span>
                   </button>
-                  <span className="text-xs text-slate-600 font-medium">
+                  <span className={`text-xs font-medium ${isSoundDisabledByTrigger ? "text-slate-400" : "text-slate-600"}`}>
                     Play a sound with this effect
                   </span>
+                  {isSoundDisabledByTrigger && (
+                    <span className="text-[10.5px] font-bold text-amber-700 bg-amber-50 border border-amber-200/90 px-2 py-0.5 rounded-full inline-flex items-center gap-1 shadow-2xs">
+                
+                      <span>Disabled for Page viewed</span>
+                    </span>
+                  )}
                 </div>
               </div>
 
               {/* Sound Select Box & Test Button */}
-              <div className={`transition-all duration-200 space-y-2.5 ${!soundEnabled ? "opacity-60" : ""}`}>
+              <div
+                className={`transition-all duration-200 space-y-2.5 ${
+                  isSoundDisabledByTrigger
+                    ? "opacity-40 pointer-events-none select-none cursor-not-allowed"
+                    : !soundEnabled
+                    ? "opacity-60"
+                    : ""
+                }`}
+              >
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
                     <select
                       value={customSound ? "Custom sound" : soundType}
-                      disabled={!soundEnabled || Boolean(customSound)}
+                      disabled={isSoundDisabledByTrigger || !soundEnabled || Boolean(customSound)}
                       onChange={(e) => {
                         const nextType = e.target.value;
                         setSoundType(nextType);
-                        if (soundEnabled) playSound(nextType, customSound);
+                        if (soundEnabled && !isSoundDisabledByTrigger) playSound(nextType, customSound);
                       }}
                       className={`w-full appearance-none px-3.5 py-2.5 rounded-xl text-xs font-medium pr-8 shadow-xs transition-all ${
-                        !soundEnabled || customSound
+                        isSoundDisabledByTrigger || !soundEnabled || customSound
                           ? "bg-slate-100/90 border border-slate-300/80 text-slate-400 cursor-not-allowed select-none"
                           : "bg-white border-2 border-[#2563eb] text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400/30 cursor-pointer"
                       }`}
                       title={
-                        !soundEnabled
+                        isSoundDisabledByTrigger
+                          ? "Sound pairing is disabled for Page viewed events."
+                          : !soundEnabled
                           ? "Sound pairing is turned off. Toggle switch above to enable sound."
                           : customSound
                           ? "Sound dropdown is disabled because a custom sound is uploaded. Remove the custom sound below to re-enable presets."
@@ -1428,7 +1771,7 @@ export default function NewEffect() {
                       <option value="Fantasy game success notification">Fantasy game success notification</option>
                     </select>
                     <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-400">
-                      {!soundEnabled || customSound ? (
+                      {isSoundDisabledByTrigger || !soundEnabled || customSound ? (
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" title="Disabled">
                           <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                           <path d="M7 11V7a5 5 0 0 1 10 0v4" />
@@ -1443,11 +1786,17 @@ export default function NewEffect() {
                   {/* Test Sound Button */}
                   <button
                     type="button"
-                    disabled={!soundEnabled}
-                    onClick={() => soundEnabled && playSound(soundType, customSound)}
-                    title={!soundEnabled ? "Enable sound pairing to test sounds" : "Click to test this sound"}
+                    disabled={isSoundDisabledByTrigger || !soundEnabled}
+                    onClick={() => soundEnabled && !isSoundDisabledByTrigger && playSound(soundType, customSound)}
+                    title={
+                      isSoundDisabledByTrigger
+                        ? "Sound pairing is disabled for Page viewed events"
+                        : !soundEnabled
+                        ? "Enable sound pairing to test sounds"
+                        : "Click to test this sound"
+                    }
                     className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
-                      !soundEnabled
+                      isSoundDisabledByTrigger || !soundEnabled
                         ? "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed select-none"
                         : "bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 hover:scale-105 active:scale-95 cursor-pointer shadow-2xs"
                     }`}
@@ -1460,7 +1809,7 @@ export default function NewEffect() {
                 {/* Upload Custom Sound Box */}
                 <div
                   className={`border rounded-2xl p-3 flex flex-col gap-2.5 transition-all ${
-                    !soundEnabled
+                    isSoundDisabledByTrigger || !soundEnabled
                       ? "border-slate-200 bg-slate-100/60 pointer-events-none select-none cursor-not-allowed"
                       : "border-purple-200/90 bg-purple-50/40"
                   }`}
@@ -1469,7 +1818,7 @@ export default function NewEffect() {
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div
                         className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-                          !soundEnabled
+                          isSoundDisabledByTrigger || !soundEnabled
                             ? "bg-slate-200 text-slate-400"
                             : "bg-purple-100 text-[#7c3aed]"
                         }`}
@@ -1481,11 +1830,13 @@ export default function NewEffect() {
                         </svg>
                       </div>
                       <div className="min-w-0">
-                        <span className={`block text-xs font-bold truncate ${!soundEnabled ? "text-slate-400" : "text-slate-800"}`}>
+                        <span className={`block text-xs font-bold truncate ${isSoundDisabledByTrigger || !soundEnabled ? "text-slate-400" : "text-slate-800"}`}>
                           {customSound ? (customSoundName || "Custom celebration sound") : "Upload your own sound"}
                         </span>
                         <span className="block text-[11px] text-slate-400 font-medium">
-                          {!soundEnabled
+                          {isSoundDisabledByTrigger
+                            ? "Sound disabled for Page viewed events"
+                            : !soundEnabled
                             ? "Sound pairing is turned off"
                             : customSound
                             ? `${customSoundDuration ? `${customSoundDuration}s • ` : ""}Custom audio ready`
@@ -1498,10 +1849,10 @@ export default function NewEffect() {
                       {customSound && (
                         <button
                           type="button"
-                          disabled={!soundEnabled}
-                          onClick={() => soundEnabled && playSound("Custom sound", customSound)}
+                          disabled={isSoundDisabledByTrigger || !soundEnabled}
+                          onClick={() => soundEnabled && !isSoundDisabledByTrigger && playSound("Custom sound", customSound)}
                           title="Preview custom sound"
-                          className="px-2.5 py-1.5 bg-purple-100 hover:bg-purple-200/80 text-purple-800 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                          className="px-2.5 py-1.5 bg-purple-100 hover:bg-purple-200/80 text-purple-800 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <span>🔊</span>
                           <span>Preview</span>
@@ -1509,7 +1860,7 @@ export default function NewEffect() {
                       )}
                       <label
                         className={`text-xs font-semibold px-2.5 py-1.5 rounded-xl transition-colors shrink-0 ${
-                          !soundEnabled
+                          isSoundDisabledByTrigger || !soundEnabled
                             ? "border border-slate-300 text-slate-400 bg-slate-200/50 cursor-not-allowed pointer-events-none"
                             : "border border-[#7c3aed] text-[#7c3aed] hover:bg-purple-100/60 cursor-pointer"
                         }`}
@@ -1518,7 +1869,7 @@ export default function NewEffect() {
                         <input
                           type="file"
                           accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
-                          disabled={!soundEnabled}
+                          disabled={isSoundDisabledByTrigger || !soundEnabled}
                           onChange={handleSoundUpload}
                           className="hidden"
                         />
@@ -1526,10 +1877,10 @@ export default function NewEffect() {
                       {customSound && (
                         <button
                           type="button"
-                          disabled={!soundEnabled}
+                          disabled={isSoundDisabledByTrigger || !soundEnabled}
                           onClick={handleRemoveCustomSound}
                           title="Remove custom sound"
-                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="18" y1="6" x2="6" y2="18" />
@@ -1541,7 +1892,7 @@ export default function NewEffect() {
                   </div>
 
                   {/* Sound Validation Error Alert */}
-                  {soundError && soundEnabled && (
+                  {soundError && soundEnabled && !isSoundDisabledByTrigger && (
                     <div className="bg-red-50 border border-red-200/90 rounded-xl px-2.5 py-2 flex items-start gap-2 text-red-700 text-[11px] font-medium leading-tight">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="shrink-0 mt-0.5">
                         <circle cx="12" cy="12" r="10" />
@@ -1554,7 +1905,9 @@ export default function NewEffect() {
                 </div>
 
                 <p className="text-[11px] text-slate-400 font-medium">
-                  {!soundEnabled
+                  {isSoundDisabledByTrigger
+                    ? "Sound pairing is unavailable for 'Page viewed' triggers to comply with browser autoplay policies."
+                    : !soundEnabled
                     ? "Turn on Sound pairing above to enable sounds."
                     : customSound
                     ? "Preset sound dropdown is locked while your custom sound is active. Click '✕' to remove it and re-enable presets."
@@ -1730,7 +2083,7 @@ export default function NewEffect() {
                       intensity={intensity}
                       shape={selectedShape}
                       colors={useBrandColor ? detectedBrandColors : customColors}
-                      customImage={customImage}
+                      customImage={selectedShape === "text" ? (emojiText || "🎉") : customImage}
                       triggerKey={burstCount}
                     />
 
@@ -2055,6 +2408,61 @@ function playSound(type, customSoundData = null) {
 
 
 
+// ===========================================================================
+// High-performance offscreen sprite cache for emojis and custom text
+// Pre-renders glyphs once onto an offscreen canvas, avoiding CPU font rasterization in the 60 FPS loop
+// ===========================================================================
+const _emojiSpriteCache = new Map();
+
+function getEmojiSprite(glyph, baseSize = 64) {
+  if (!glyph || typeof glyph !== "string") return null;
+  const trimmed = glyph.trim();
+  if (!trimmed) return null;
+
+  const cacheKey = `${trimmed}_${baseSize}`;
+  if (_emojiSpriteCache.has(cacheKey)) {
+    return _emojiSpriteCache.get(cacheKey);
+  }
+  if (typeof document === "undefined") return null;
+
+  try {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const isLongWord = trimmed.length > 2;
+    const fontSize = isLongWord ? Math.round(baseSize * 0.42) : Math.round(baseSize * 0.72);
+    const fontStr = `bold ${fontSize}px "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif`;
+    ctx.font = fontStr;
+
+    const textWidth = ctx.measureText(trimmed).width;
+    const width = Math.max(baseSize, Math.ceil(textWidth + 14));
+    const height = baseSize;
+
+    canvas.width = width;
+    canvas.height = height;
+
+    // Canvas resets 2D context state on dimension change
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = fontStr;
+    ctx.fillText(trimmed, width / 2, height / 2);
+
+    const spriteObj = {
+      canvas,
+      width,
+      height,
+      aspect: width / height,
+    };
+
+    _emojiSpriteCache.set(cacheKey, spriteObj);
+    return spriteObj;
+  } catch (err) {
+    console.warn("[ConfettiFlow] Failed to create emoji sprite:", err);
+    return null;
+  }
+}
+
 // Canvas Physics Confetti Simulator animating all 5 modes
 function ConfettiCanvasPreview({
   mode = "Burst",
@@ -2078,7 +2486,7 @@ function ConfettiCanvasPreview({
 
   // Preload custom image if provided (non-triggering update)
   useEffect(() => {
-    if (customImage) {
+    if (customImage && shape === "custom") {
       const img = new Image();
       img.src = customImage;
       img.onload = () => {
@@ -2087,11 +2495,16 @@ function ConfettiCanvasPreview({
     } else {
       imgRef.current = null;
     }
-  }, [customImage]);
+  }, [customImage, shape]);
 
   // ONLY re-run the animation when triggerKey changes (explicit user action)
   useEffect(() => {
     if (triggerKey === 0) return; // skip initial render
+
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2099,7 +2512,7 @@ function ConfettiCanvasPreview({
     if (!ctx) return;
 
     // Read latest config from ref so it's always current
-    const { mode, position, duration, intensity, shape, colors } = configRef.current;
+    const { mode, position, duration, intensity, shape, colors, customImage } = configRef.current;
 
     const parent = canvas.parentElement;
     const rect = canvas.getBoundingClientRect();
@@ -2114,6 +2527,11 @@ function ConfettiCanvasPreview({
     const startTime = performance.now();
     const durationMs = duration * 1000;
     const intensityScale = [0.7, 1.0, 1.5, 2.2][intensity - 1] || 1.0;
+
+    // Pre-calculate emoji sprites once outside the render loop
+    const isTextShape = shape === "text";
+    const emojiList = isTextShape ? parseEmojisOrText(customImage || "🎉") : [];
+    const emojiSprites = emojiList.map((item) => getEmojiSprite(item)).filter(Boolean);
 
     // Determine origin coordinates based on position setting
     const getOrigin = () => {
@@ -2138,27 +2556,29 @@ function ConfettiCanvasPreview({
 
     // 1. BURST MODE: Fires once, all at once, radiating outward from a central point
     if (mode === "Burst") {
-      const count = Math.round(75 * intensityScale);
+      const count = isTextShape ? Math.round(38 * intensityScale) : Math.round(75 * intensityScale);
       for (let i = 0; i < count; i++) {
         const angle = Math.random() * Math.PI * 2;
         const speed = (Math.random() * 8.5 + 4.5) * (0.85 + intensityScale * 0.15);
+        const sprite = isTextShape && emojiSprites.length > 0 ? emojiSprites[i % emojiSprites.length] : null;
         particles.push({
           x: ox,
           y: oy,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed - 2.2,
           color: colors[i % colors.length],
-          size: Math.random() * 5 + 7,
-          rotation: Math.random() * Math.PI * 2,
-          rotSpeed: (Math.random() - 0.5) * 0.3,
+          size: isTextShape ? Math.random() * 4 + 9 : Math.random() * 5 + 7,
+          rotation: (Math.random() - 0.5) * 0.4,
+          rotSpeed: (Math.random() - 0.5) * (isTextShape ? 0.12 : 0.3),
           scaleX: 1,
           scaleY: 1,
           scaleSpeed: Math.random() * 0.1 + 0.05,
-          gravity: 0.22,
-          drag: 0.956,
+          gravity: isTextShape ? 0.18 : 0.22,
+          drag: isTextShape ? 0.962 : 0.956,
           opacity: 1,
           life: 0,
           maxLife: Math.min(durationMs, 3200),
+          sprite,
         });
       }
     }
@@ -2178,7 +2598,9 @@ function ConfettiCanvasPreview({
       if (elapsed < durationMs) {
         // 2. FALLING MODE: Continuous rain-style effect for as long as duration is set
         if (mode === "Falling") {
-          const spawnRate = Math.round(2.5 * intensityScale);
+          const spawnRate = isTextShape
+            ? Math.max(1, Math.round(1.2 * intensityScale))
+            : Math.round(2.5 * intensityScale);
           for (let i = 0; i < spawnRate; i++) {
             let spawnX = Math.random() * width;
             if (position === "Center") {
@@ -2188,19 +2610,20 @@ function ConfettiCanvasPreview({
             } else if (position === "Right side") {
               spawnX = width * 0.55 + Math.random() * (width * 0.45);
             }
+            const sprite = isTextShape && emojiSprites.length > 0 ? emojiSprites[Math.floor(Math.random() * emojiSprites.length)] : null;
             particles.push({
               x: spawnX,
-              y: -12,
+              y: -14,
               vx: (Math.random() - 0.5) * 1.5,
               vy: Math.random() * 1.8 + 1.6,
               color: colors[Math.floor(Math.random() * colors.length)],
-              size: Math.random() * 5 + 7,
-              rotation: Math.random() * Math.PI * 2,
-              rotSpeed: (Math.random() - 0.5) * 0.18,
+              size: isTextShape ? Math.random() * 4 + 9 : Math.random() * 5 + 7,
+              rotation: (Math.random() - 0.5) * 0.4,
+              rotSpeed: (Math.random() - 0.5) * (isTextShape ? 0.08 : 0.18),
               scaleX: 1,
               scaleY: 1,
               scaleSpeed: Math.random() * 0.08 + 0.04,
-              gravity: 0.038,
+              gravity: isTextShape ? 0.03 : 0.038,
               drag: 0.994,
               opacity: 1,
               swayAmp: Math.random() * 1.8 + 0.8,
@@ -2208,6 +2631,7 @@ function ConfettiCanvasPreview({
               phase: Math.random() * Math.PI * 2,
               life: 0,
               maxLife: 2800,
+              sprite,
             });
           }
         }
@@ -2239,7 +2663,9 @@ function ConfettiCanvasPreview({
           const targetRise = Math.max(100, fountainY - targetApexY);
           const baseSpeed = Math.sqrt(targetRise * 1.05);
 
-          const spawnRate = Math.round(3.2 * intensityScale);
+          const spawnRate = isTextShape
+            ? Math.max(1, Math.round(1.5 * intensityScale))
+            : Math.round(3.2 * intensityScale);
           for (let i = 0; i < spawnRate; i++) {
             const isSplash = i === 0 && Math.random() < 0.45;
 
@@ -2262,15 +2688,18 @@ function ConfettiCanvasPreview({
               speed = baseSpeed * speedMult * (0.85 + intensityScale * 0.15);
             }
 
+            const sprite = isTextShape && emojiSprites.length > 0 ? emojiSprites[Math.floor(Math.random() * emojiSprites.length)] : null;
             particles.push({
               x: fountainX + (Math.random() - 0.5) * reservoirWidth,
               y: fountainY + (Math.random() - 0.5) * 6,
               vx: Math.cos(angle) * speed,
               vy: Math.sin(angle) * speed,
               color: colors[Math.floor(Math.random() * colors.length)],
-              size: isSplash ? Math.random() * 4 + 4 : Math.random() * 6 + 6,
+              size: isSplash
+                ? Math.random() * 4 + (isTextShape ? 7 : 4)
+                : Math.random() * 5 + (isTextShape ? 8 : 6),
               rotation: Math.random() * Math.PI * 2,
-              rotSpeed: (Math.random() - 0.5) * 0.32,
+              rotSpeed: (Math.random() - 0.5) * (isTextShape ? 0.14 : 0.32),
               scaleX: 1,
               scaleY: 1,
               scaleSpeed: Math.random() * 0.08 + 0.04,
@@ -2279,6 +2708,7 @@ function ConfettiCanvasPreview({
               opacity: 1,
               life: 0,
               maxLife: 3200,
+              sprite,
             });
           }
         }
@@ -2289,7 +2719,9 @@ function ConfettiCanvasPreview({
           const currentVolley = Math.floor(elapsed / cannonVolleyInterval);
           if (currentVolley > lastCannonVolley) {
             lastCannonVolley = currentVolley;
-            const volleyCount = Math.round(26 * intensityScale);
+            const volleyCount = isTextShape
+              ? Math.round(14 * intensityScale)
+              : Math.round(26 * intensityScale);
             const targetDist = Math.max(width * 0.65, height * 0.75);
             const baseSpeed = Math.sqrt(targetDist * 0.95);
 
@@ -2301,23 +2733,25 @@ function ConfettiCanvasPreview({
                 const angle = -Math.PI * 0.28 + (Math.random() - 0.5) * 0.38;
                 const speedMult = 0.82 + Math.random() * 0.36;
                 const speed = baseSpeed * speedMult * (0.85 + intensityScale * 0.15);
+                const sprite = isTextShape && emojiSprites.length > 0 ? emojiSprites[i % emojiSprites.length] : null;
                 particles.push({
                   x: originX,
                   y: originY,
                   vx: Math.cos(angle) * speed,
                   vy: Math.sin(angle) * speed,
                   color: colors[Math.floor(Math.random() * colors.length)],
-                  size: Math.random() * 6 + 7,
+                  size: isTextShape ? Math.random() * 4 + 9 : Math.random() * 6 + 7,
                   rotation: Math.random() * Math.PI * 2,
-                  rotSpeed: (Math.random() - 0.5) * 0.35,
+                  rotSpeed: (Math.random() - 0.5) * (isTextShape ? 0.15 : 0.35),
                   scaleX: 1,
                   scaleY: 1,
                   scaleSpeed: 0.08,
-                  gravity: 0.25,
+                  gravity: isTextShape ? 0.22 : 0.25,
                   drag: 0.982,
                   opacity: 1,
                   life: 0,
                   maxLife: 2800,
+                  sprite,
                 });
               }
             }
@@ -2330,23 +2764,25 @@ function ConfettiCanvasPreview({
                 const angle = -Math.PI * 0.72 + (Math.random() - 0.5) * 0.38;
                 const speedMult = 0.82 + Math.random() * 0.36;
                 const speed = baseSpeed * speedMult * (0.85 + intensityScale * 0.15);
+                const sprite = isTextShape && emojiSprites.length > 0 ? emojiSprites[i % emojiSprites.length] : null;
                 particles.push({
                   x: originX,
                   y: originY,
                   vx: Math.cos(angle) * speed,
                   vy: Math.sin(angle) * speed,
                   color: colors[Math.floor(Math.random() * colors.length)],
-                  size: Math.random() * 6 + 7,
+                  size: isTextShape ? Math.random() * 4 + 9 : Math.random() * 6 + 7,
                   rotation: Math.random() * Math.PI * 2,
-                  rotSpeed: (Math.random() - 0.5) * 0.35,
+                  rotSpeed: (Math.random() - 0.5) * (isTextShape ? 0.15 : 0.35),
                   scaleX: 1,
                   scaleY: 1,
                   scaleSpeed: 0.08,
-                  gravity: 0.25,
+                  gravity: isTextShape ? 0.22 : 0.25,
                   drag: 0.982,
                   opacity: 1,
                   life: 0,
                   maxLife: 2800,
+                  sprite,
                 });
               }
             }
@@ -2371,20 +2807,23 @@ function ConfettiCanvasPreview({
               { x: width * 0.30, y: height * 0.50 },
             ];
             const targetPos = fireworkPositions[currentFirework % fireworkPositions.length];
-            const burstParticles = Math.round(30 * intensityScale);
+            const burstParticles = isTextShape
+              ? Math.round(16 * intensityScale)
+              : Math.round(30 * intensityScale);
 
             for (let p = 0; p < burstParticles; p++) {
               const angle = Math.random() * Math.PI * 2;
               const speed = (Math.random() * 5.2 + 2.8) * (0.85 + intensityScale * 0.15);
+              const sprite = isTextShape && emojiSprites.length > 0 ? emojiSprites[p % emojiSprites.length] : null;
               particles.push({
                 x: targetPos.x,
                 y: targetPos.y,
                 vx: Math.cos(angle) * speed,
                 vy: Math.sin(angle) * speed,
                 color: colors[p % colors.length],
-                size: Math.random() * 5 + 6,
+                size: isTextShape ? Math.random() * 4 + 8 : Math.random() * 5 + 6,
                 rotation: Math.random() * Math.PI * 2,
-                rotSpeed: (Math.random() - 0.5) * 0.35,
+                rotSpeed: (Math.random() - 0.5) * (isTextShape ? 0.15 : 0.35),
                 scaleX: 1,
                 scaleY: 1,
                 scaleSpeed: 0.09,
@@ -2394,6 +2833,7 @@ function ConfettiCanvasPreview({
                 twinkle: true,
                 life: 0,
                 maxLife: 1550,
+                sprite,
               });
             }
           }
@@ -2428,7 +2868,15 @@ function ConfettiCanvasPreview({
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(p.rotation);
-        ctx.scale(p.scaleX, p.scaleY);
+
+        if (isTextShape) {
+          // Subtle celebratory scale wobble without inverted mirroring
+          const wobble = 0.94 + Math.sin(p.life * 0.007) * 0.06;
+          ctx.scale(wobble, wobble);
+        } else {
+          ctx.scale(p.scaleX, p.scaleY);
+        }
+
         ctx.globalAlpha = p.opacity;
         ctx.fillStyle = p.color;
 
@@ -2444,9 +2892,17 @@ function ConfettiCanvasPreview({
           drawCanvasHeart(ctx, 0, 0, p.size);
         } else if (shape === "triangle") {
           drawCanvasTriangle(ctx, 0, 0, p.size);
+        } else if (shape === "text") {
+          const sprite = p.sprite || (emojiSprites.length > 0 ? emojiSprites[0] : null);
+          if (sprite && sprite.canvas) {
+            const drawH = p.size * 2.2;
+            const drawW = drawH * sprite.aspect;
+            ctx.drawImage(sprite.canvas, -drawW / 2, -drawH / 2, drawW, drawH);
+          }
         } else {
-          ctx.font = `${Math.round(p.size)}px sans-serif`;
-          ctx.fillText("🎉", -p.size / 2, p.size / 2);
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
+          ctx.fill();
         }
 
         ctx.restore();
