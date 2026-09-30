@@ -608,7 +608,7 @@ export default function EditPremadeEffectPage() {
                   onChange={(e) => setTriggerEvent(e.target.value)}
                   className="w-full appearance-none px-3.5 py-2.5 bg-slate-50/70 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-400/30 focus:border-purple-400 transition-all pr-9 cursor-pointer font-medium"
                 >
-                  <option value="Order created">Order created</option>
+                  {/* <option value="Order created">Order created</option> */}
                   <option value="Page viewed">Page viewed</option>
                   <option value="Cart updated">Cart updated</option>
                   <option value="Customer created">Customer created</option>
